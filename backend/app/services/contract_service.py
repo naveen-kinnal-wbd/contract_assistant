@@ -5,7 +5,7 @@ Contract processing service with async workflow management
 import asyncio
 import logging
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Optional
 
 from ..models.schemas import (
     DocumentGroup,
@@ -23,28 +23,11 @@ class ContractService:
 
     # In-memory storage for workflow progress (in production, use Redis or database)
     _workflow_store: dict[str, WorkflowProgress] = {}
-    _callbacks: dict[str, list[Callable]] = {}
 
     @classmethod
     def get_workflow_progress(cls, group_id: str) -> Optional[WorkflowProgress]:
         """Retrieve current workflow progress for a document group"""
         return cls._workflow_store.get(group_id)
-
-    @classmethod
-    def register_callback(cls, group_id: str, callback: Callable):
-        """Register a callback for workflow updates"""
-        if group_id not in cls._callbacks:
-            cls._callbacks[group_id] = []
-        cls._callbacks[group_id].append(callback)
-
-    @classmethod
-    def _notify_callbacks(cls, group_id: str, progress: WorkflowProgress):
-        """Notify all registered callbacks of progress update"""
-        for callback in cls._callbacks.get(group_id, []):
-            try:
-                callback(progress)
-            except Exception as e:
-                logger.error(f"Callback error for group {group_id}: {e}")
 
     @classmethod
     def _update_progress(
@@ -81,7 +64,6 @@ class ContractService:
             progress.current_status = status
             progress.current_step_index = len(progress.steps) - 1
 
-        cls._notify_callbacks(group_id, cls._workflow_store[group_id])
         return cls._workflow_store[group_id]
 
     @classmethod
@@ -272,5 +254,3 @@ class ContractService:
         """Clear workflow data for a document group"""
         if group_id in cls._workflow_store:
             del cls._workflow_store[group_id]
-        if group_id in cls._callbacks:
-            del cls._callbacks[group_id]
