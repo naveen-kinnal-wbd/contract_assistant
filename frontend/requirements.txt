@@ -1,0 +1,5 @@
+# Contract Assistance Frontend Dependencies
+streamlit
+httpx
+python-dotenv
+

@@ -1,0 +1,14 @@
+# Contract Assistance Backend Dependencies
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+
+# Testing
+pytest
+pytest-asyncio
+httpx
+
+# Development
+python-dotenv
+

@@ -1,0 +1,4 @@
+"""
+Contract Assistance Backend Application
+"""
+
