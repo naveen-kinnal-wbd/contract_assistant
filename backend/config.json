@@ -1,0 +1,22 @@
+{
+  "llm": {
+    "provider": "bedrock",
+    "model_id": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "region": "us-east-1",
+    "max_tokens": 4096,
+    "temperature": 0.0,
+    "anthropic_version": "bedrock-2023-05-31"
+  },
+  "processing": {
+    "image_format": "PNG",
+    "image_dpi": 150,
+    "max_pages": 50,
+    "saved_images_dir": "saved"
+  },
+  "upload": {
+    "bucket": "contract-assistant-workflow",
+    "region": "us-east-1",
+    "path_prefix": "uploaded"
+  }
+}
+

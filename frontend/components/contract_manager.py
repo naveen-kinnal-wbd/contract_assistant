@@ -3,8 +3,8 @@ Contract Manager pane component
 """
 
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import uuid
-import time
 from typing import Optional
 from services.api_client import (
     ContractAPIClient,
@@ -213,7 +213,7 @@ def render_contract_manager(api_client: ContractAPIClient):
     st.markdown("---")
     render_document_tiles(st.session_state.document_groups, api_client)
 
-    # Auto-refresh when there are in-progress workflows
+    # Auto-refresh when there are in-progress workflows (non-blocking)
     if st.session_state.document_groups:
         has_in_progress = False
         for group_info in st.session_state.document_groups:
@@ -230,7 +230,6 @@ def render_contract_manager(api_client: ContractAPIClient):
                 pass
 
         if has_in_progress:
-            # Show refresh indicator
+            # Non-blocking auto-refresh using streamlit-autorefresh
             st.caption("🔄 Auto-refreshing workflow status...")
-            time.sleep(1.5)  # Poll interval
-            st.rerun()
+            st_autorefresh(interval=1500, limit=None, key="workflow_autorefresh")

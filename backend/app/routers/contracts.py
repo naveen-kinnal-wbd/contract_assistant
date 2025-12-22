@@ -38,6 +38,12 @@ async def process_contract_inference(
         f"Received contract inference request for group: {document_group.group_id}"
     )
 
+    # Initialize progress immediately so frontend can poll it right away
+    initial_progress = ContractService.initialize_workflow_progress(
+        group_id=document_group.group_id,
+        identifier_name=document_group.identifier_name,
+    )
+
     # Start processing in background
     background_tasks.add_task(
         ContractService.process_contract_inference,
@@ -48,6 +54,7 @@ async def process_contract_inference(
         group_id=document_group.group_id,
         status=WorkflowStatus.IN_PROGRESS,
         message="Contract inference processing started.",
+        workflow_progress=initial_progress,
     )
 
 
@@ -66,6 +73,12 @@ async def process_blueprints_refinement(
         f"Received blueprint refinement request for group: {document_group.group_id}"
     )
 
+    # Initialize progress immediately so frontend can poll it right away
+    initial_progress = ContractService.initialize_workflow_progress(
+        group_id=document_group.group_id,
+        identifier_name=document_group.identifier_name,
+    )
+
     # Start processing in background
     background_tasks.add_task(
         ContractService.process_blueprints_refinement,
@@ -76,6 +89,7 @@ async def process_blueprints_refinement(
         group_id=document_group.group_id,
         status=WorkflowStatus.IN_PROGRESS,
         message="Blueprint refinement processing started.",
+        workflow_progress=initial_progress,
     )
 
 
@@ -99,7 +113,7 @@ async def select_asset(request: AssetSelectionRequest):
     """
     logger.info(f"Received asset selection for group: {request.group_id}")
 
-    response = await ContractService.continue_after_selection(request)
+    response = await ContractService.continue_after_asset_selection(request)
 
     return response
 

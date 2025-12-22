@@ -4,6 +4,10 @@ uvicorn[standard]
 pydantic
 python-multipart
 
+# LangGraph Workflow
+langgraph
+boto3
+
 # Testing
 pytest
 pytest-asyncio

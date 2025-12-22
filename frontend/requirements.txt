@@ -1,5 +1,6 @@
 # Contract Assistance Frontend Dependencies
 streamlit
+streamlit-autorefresh
 httpx
 python-dotenv
 

@@ -7,6 +7,15 @@ from components.contract_manager import render_contract_manager
 from components.blueprint_manager import render_blueprint_manager
 
 
+@st.cache_data(ttl=30)
+def check_api_health(_api_client: ContractAPIClient) -> bool:
+    """Cached health check to avoid blocking UI on every render"""
+    try:
+        return _api_client.health_check()
+    except Exception:
+        return False
+
+
 # Page configuration
 st.set_page_config(
     page_title="Contract Assistance",
@@ -213,7 +222,7 @@ def main():
         # API status indicator
         st.markdown("---")
         try:
-            api_healthy = api_client.health_check()
+            api_healthy = check_api_health(api_client)
             if api_healthy:
                 st.markdown(
                     """

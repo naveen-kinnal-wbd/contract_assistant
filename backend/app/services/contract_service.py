@@ -17,6 +17,7 @@ from ..models.schemas import (
     WorkflowProgress,
     ProcessingResponse,
 )
+from ..workflows.graphs.blueprint_workflow import run_blueprint_refinement_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,36 @@ class ContractService:
 
     # Store for pending workflows awaiting selection
     _pending_selection: dict[str, DocumentGroup] = {}
+
+    @classmethod
+    def initialize_workflow_progress(
+        cls,
+        group_id: str,
+        identifier_name: str,
+    ) -> WorkflowProgress:
+        """
+        Initialize workflow progress before starting background task.
+        This ensures the frontend can poll for progress immediately.
+        """
+        step = WorkflowStep(
+            step_id="initializing",
+            step_name="Initializing",
+            status=WorkflowStatus.IN_PROGRESS,
+            message="Initializing workflow...",
+            timestamp=datetime.utcnow(),
+            requires_feedback=False,
+            selection_data=None,
+        )
+
+        cls._workflow_store[group_id] = WorkflowProgress(
+            group_id=group_id,
+            identifier_name=identifier_name,
+            current_status=WorkflowStatus.IN_PROGRESS,
+            steps=[step],
+            current_step_index=0,
+        )
+
+        return cls._workflow_store[group_id]
 
     @classmethod
     def _update_progress(
@@ -178,7 +209,7 @@ class ContractService:
         cls, document_group: DocumentGroup
     ) -> ProcessingResponse:
         """
-        Process contract documents with blueprint refinement.
+        Process contract documents with blueprint refinement using LangGraph workflow.
         This is an async method that can be run in parallel for different document groups.
         """
         group_id = document_group.group_id
@@ -186,98 +217,89 @@ class ContractService:
 
         try:
             # Step 1: Upload documents
-            logger.info(f"[{group_id}] Uploading contract documents")
+            logger.info(f"[{group_id}] Starting blueprint refinement workflow")
             cls._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
                 step_id="upload",
                 step_name="Document Upload",
                 status=WorkflowStatus.IN_PROGRESS,
-                message="Uploading contract documents...",
+                message="Uploading documents to S3...",
             )
 
-            # Simulate upload process
-            await asyncio.sleep(2)
+            # Run the LangGraph workflow
+            final_state = await run_blueprint_refinement_workflow(document_group)
 
-            logger.info(f"[{group_id}] Contract documents uploaded")
+            # Check if workflow failed
+            if final_state["status"] == WorkflowStatus.FAILED:
+                error_msg = final_state.get("error_message", "Workflow failed")
+                logger.error(f"[{group_id}] Workflow failed: {error_msg}")
+                final_progress = cls._update_progress(
+                    group_id=group_id,
+                    identifier_name=identifier_name,
+                    step_id="workflow_failed",
+                    step_name="Workflow Failed",
+                    status=WorkflowStatus.FAILED,
+                    message=error_msg,
+                )
+                return ProcessingResponse(
+                    group_id=group_id,
+                    status=WorkflowStatus.FAILED,
+                    message=error_msg,
+                    workflow_progress=final_progress,
+                )
+
+            # Step 2: Upload completed - add intermediate progress update
+            uploaded_files = final_state.get("uploaded_files", [])
+            upload_path = final_state.get("upload_path", "S3")
+            logger.info(f"[{group_id}] Documents uploaded: {len(uploaded_files)} files")
             cls._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
                 step_id="upload_complete",
                 step_name="Document Upload",
                 status=WorkflowStatus.IN_PROGRESS,
-                message="Contract documents uploaded successfully.",
+                message=f"Uploaded {len(uploaded_files)} document(s) to {upload_path}",
             )
 
-            # Step 2: Blueprint analysis
-            logger.info(f"[{group_id}] Analyzing blueprints")
-            cls._update_progress(
-                group_id=group_id,
-                identifier_name=identifier_name,
-                step_id="blueprint_analysis",
-                step_name="Blueprint Analysis",
-                status=WorkflowStatus.IN_PROGRESS,
-                message="Analyzing and refining blueprints...",
-            )
-
-            await asyncio.sleep(2)
-
-            # Step 3: Metadata extraction
-            logger.info(f"[{group_id}] Extracting metadata with refined blueprints")
-            cls._update_progress(
-                group_id=group_id,
-                identifier_name=identifier_name,
-                step_id="extraction",
-                step_name="Metadata Extraction",
-                status=WorkflowStatus.IN_PROGRESS,
-                message="Extracting metadata using refined blueprints...",
-            )
-
-            await asyncio.sleep(2)
-
-            # Step 4: Asset Selection (pause for user input)
-            logger.info(f"[{group_id}] Awaiting asset selection")
-            asset_options = load_asset_selection_data()
-            cls._pending_selection[group_id] = document_group
-
+            # Workflow completed successfully
+            logger.info(f"[{group_id}] Blueprint refinement workflow completed")
             final_progress = cls._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
-                step_id="asset_selection",
-                step_name="Asset Selection",
-                status=WorkflowStatus.AWAITING_FEEDBACK,
-                message="Please select an asset to continue.",
-                requires_feedback=True,
-                selection_data=asset_options,
+                step_id="workflow_complete",
+                step_name="Workflow Complete",
+                status=WorkflowStatus.COMPLETED,
+                message=f"Blueprint refinement completed successfully.",
             )
 
             return ProcessingResponse(
                 group_id=group_id,
-                status=WorkflowStatus.AWAITING_FEEDBACK,
-                message="Awaiting asset selection.",
+                status=WorkflowStatus.COMPLETED,
+                message="Blueprint refinement completed successfully.",
                 workflow_progress=final_progress,
             )
 
         except Exception as e:
-            logger.error(f"[{group_id}] Processing failed: {e}")
+            logger.error(f"[{group_id}] Blueprint refinement failed: {e}")
             final_progress = cls._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
                 step_id="error",
                 step_name="Error",
                 status=WorkflowStatus.FAILED,
-                message=f"Processing failed: {str(e)}",
+                message=f"Blueprint refinement failed: {str(e)}",
             )
 
             return ProcessingResponse(
                 group_id=group_id,
                 status=WorkflowStatus.FAILED,
-                message=f"Processing failed: {str(e)}",
+                message=f"Blueprint refinement failed: {str(e)}",
                 workflow_progress=final_progress,
             )
 
     @classmethod
-    async def continue_after_selection(
+    async def continue_after_asset_selection(
         cls, request: AssetSelectionRequest
     ) -> ProcessingResponse:
         """
