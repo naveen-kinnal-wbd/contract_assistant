@@ -1,6 +1,7 @@
 """
 Pydantic schemas for Contract Assistance API
 """
+
 from enum import Enum
 from typing import Optional
 from datetime import datetime
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 
 class DocumentType(str, Enum):
     """Type of document group being uploaded"""
+
     STANDALONE = "standalone"
     MASTER = "master"
     WAIVER = "waiver"
@@ -16,6 +18,7 @@ class DocumentType(str, Enum):
 
 class FileType(str, Enum):
     """Type classification for individual files"""
+
     MASTER = "MASTER"
     ATTACHMENT = "ATTACHMENT"
     STANDALONE = "STANDALONE"
@@ -24,6 +27,7 @@ class FileType(str, Enum):
 
 class WorkflowStatus(str, Enum):
     """Status of the document processing workflow"""
+
     IN_PROGRESS = "in_progress"
     AWAITING_FEEDBACK = "awaiting_feedback"
     COMPLETED = "completed"
@@ -32,6 +36,7 @@ class WorkflowStatus(str, Enum):
 
 class DocumentMetadata(BaseModel):
     """Metadata for an individual document file"""
+
     filename: str
     file_type: FileType
     size_bytes: int = 0
@@ -40,8 +45,11 @@ class DocumentMetadata(BaseModel):
 
 class DocumentGroup(BaseModel):
     """Request model for document group processing"""
+
     group_id: str = Field(..., description="Unique identifier for the document group")
-    identifier_name: str = Field(..., description="User-defined nickname for the document group")
+    identifier_name: str = Field(
+        ..., description="User-defined nickname for the document group"
+    )
     document_type: DocumentType
     documents: list[DocumentMetadata]
     refine_blueprints: bool = True
@@ -49,16 +57,19 @@ class DocumentGroup(BaseModel):
 
 class WorkflowStep(BaseModel):
     """Individual step in the processing workflow"""
+
     step_id: str
     step_name: str
     status: WorkflowStatus
     message: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     requires_feedback: bool = False
+    selection_data: Optional[list[dict]] = None  # For asset selection options
 
 
 class WorkflowProgress(BaseModel):
     """Progress update for document processing workflow"""
+
     group_id: str
     identifier_name: str
     current_status: WorkflowStatus
@@ -68,8 +79,18 @@ class WorkflowProgress(BaseModel):
 
 class ProcessingResponse(BaseModel):
     """Response model for processing endpoints"""
+
     group_id: str
     status: WorkflowStatus
     message: str
     workflow_progress: Optional[WorkflowProgress] = None
 
+
+class AssetSelectionRequest(BaseModel):
+    """Request model for asset selection"""
+
+    group_id: str
+    deal_id: str
+    asset_id: str
+    deal_name: str
+    asset_name: str

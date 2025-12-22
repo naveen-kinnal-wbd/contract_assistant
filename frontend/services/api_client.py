@@ -1,6 +1,7 @@
 """
 API client for communicating with Contract Assistance backend
 """
+
 import os
 import httpx
 from typing import Optional
@@ -10,6 +11,7 @@ from enum import Enum
 
 class WorkflowStatus(str, Enum):
     """Status of the document processing workflow"""
+
     IN_PROGRESS = "in_progress"
     AWAITING_FEEDBACK = "awaiting_feedback"
     COMPLETED = "completed"
@@ -18,6 +20,7 @@ class WorkflowStatus(str, Enum):
 
 class DocumentType(str, Enum):
     """Type of document group being uploaded"""
+
     STANDALONE = "standalone"
     MASTER = "master"
     WAIVER = "waiver"
@@ -25,6 +28,7 @@ class DocumentType(str, Enum):
 
 class FileType(str, Enum):
     """Type classification for individual files"""
+
     MASTER = "MASTER"
     ATTACHMENT = "ATTACHMENT"
     STANDALONE = "STANDALONE"
@@ -34,6 +38,7 @@ class FileType(str, Enum):
 @dataclass
 class DocumentMetadata:
     """Metadata for an individual document file"""
+
     filename: str
     file_type: FileType
     size_bytes: int = 0
@@ -51,6 +56,7 @@ class DocumentMetadata:
 @dataclass
 class DocumentGroup:
     """Document group for processing"""
+
     group_id: str
     identifier_name: str
     document_type: DocumentType
@@ -138,3 +144,18 @@ class ContractAPIClient:
         except Exception:
             return False
 
+    def select_asset(self, group_id: str, selection: dict) -> dict:
+        """
+        Submit asset selection to continue the workflow
+
+        Args:
+            group_id: The workflow group ID
+            selection: Dict with keys deal_id, asset_id, deal_name, asset_name
+        """
+        with self._get_client() as client:
+            response = client.post(
+                "/api/contracts/select-asset",
+                json={"group_id": group_id, **selection},
+            )
+            response.raise_for_status()
+            return response.json()

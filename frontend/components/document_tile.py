@@ -69,7 +69,43 @@ def get_step_icon(status: str) -> str:
     return icon_map.get(status, "○")
 
 
-def render_workflow_steps(steps: list[dict], current_step_index: int):
+def render_asset_selection_table(group_id: str, selection_data: list[dict], api_client):
+    """Render the asset selection table with Select buttons"""
+    if not selection_data:
+        return
+
+    st.markdown("**Select an asset to continue:**")
+
+    # Create a table-like display using columns
+    # Header row
+    cols = st.columns([2, 2, 1, 1, 1])
+    cols[0].markdown("**Deal Name**")
+    cols[1].markdown("**Asset Name**")
+    cols[2].markdown("**Deal ID**")
+    cols[3].markdown("**Asset ID**")
+    cols[4].markdown("**Action**")
+
+    st.markdown("---")
+
+    # Data rows
+    for idx, item in enumerate(selection_data):
+        cols = st.columns([2, 2, 1, 1, 1])
+        cols[0].write(item.get("deal_name", ""))
+        cols[1].write(item.get("asset_name", ""))
+        cols[2].write(item.get("deal_id", ""))
+        cols[3].write(item.get("asset_id", ""))
+
+        if cols[4].button("Select", key=f"select_{group_id}_{idx}"):
+            try:
+                api_client.select_asset(group_id=group_id, selection=item)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to submit selection: {str(e)}")
+
+
+def render_workflow_steps(
+    steps: list[dict], current_step_index: int, group_id: str = None, api_client=None
+):
     """Render the workflow steps using native Streamlit components"""
     if not steps:
         st.caption("No workflow steps yet...")
@@ -79,6 +115,7 @@ def render_workflow_steps(steps: list[dict], current_step_index: int):
         status = step.get("status", "")
         message = step.get("message", "Processing...")
         timestamp = step.get("timestamp", "")
+        selection_data = step.get("selection_data")
 
         if timestamp:
             # Format timestamp for display
@@ -103,8 +140,20 @@ def render_workflow_steps(steps: list[dict], current_step_index: int):
             if timestamp:
                 st.caption(timestamp)
 
+        # Show asset selection table if this step requires feedback
+        if (
+            status == WorkflowStatus.AWAITING_FEEDBACK.value
+            and selection_data
+            and group_id
+            and api_client
+        ):
+            st.markdown("")
+            render_asset_selection_table(group_id, selection_data, api_client)
 
-def render_document_tile(group_id: str, identifier_name: str, progress: Optional[dict]):
+
+def render_document_tile(
+    group_id: str, identifier_name: str, progress: Optional[dict], api_client=None
+):
     """Render a single document tile with expandable details"""
     status = (
         progress.get("current_status", WorkflowStatus.IN_PROGRESS.value)
@@ -157,13 +206,16 @@ def render_document_tile(group_id: str, identifier_name: str, progress: Optional
 
     st.markdown(tile_header_html, unsafe_allow_html=True)
 
+    # Determine if we should auto-expand (when awaiting feedback)
+    should_expand = status == WorkflowStatus.AWAITING_FEEDBACK.value
+
     # Create the expander for workflow details below the header
-    with st.expander("View Workflow Details", expanded=False):
+    with st.expander("View Workflow Details", expanded=should_expand):
         # Workflow steps
         if progress:
             steps = progress.get("steps", [])
             current_step_index = progress.get("current_step_index", 0)
-            render_workflow_steps(steps, current_step_index)
+            render_workflow_steps(steps, current_step_index, group_id, api_client)
         else:
             st.caption("Initializing workflow...")
 
@@ -215,4 +267,4 @@ def render_document_tiles(document_groups: list[dict], api_client):
         except Exception:
             progress = None
 
-        render_document_tile(group_id, identifier_name, progress)
+        render_document_tile(group_id, identifier_name, progress, api_client)

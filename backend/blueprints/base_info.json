@@ -1,0 +1,46 @@
+{
+    "base_info": {
+        "contract_type": {
+        "description": "Specifies the type of agreement",
+        "allowed_values": ["Acquisition", "Co-production", "Commission", "Amendment"],
+        "additional_instructions": [],
+        "output_format": "string"
+        },
+        "contract_name": {
+            "description": "Text describing the contract",
+            "allowed_values": "ANY",
+            "additional_instructions": ["If the contract type is Acquisition: it should be License Agreement - <Program>"],
+            "output_format": "string"
+        },
+        "date_executed": {
+            "description": "Date when the contract is signed",
+            "allowed_values": "ANY",
+            "additional_instructions": [
+                "Look in: 1) the signature section 2) the header/footer of document 3) at the beginning of the document in the format of 'As of <Date>' in that order",
+                "If you could not find any, leave it blank",
+                "In case of multiple documents, if there is an 'Attachment' document type, extract from Attachment; otherwise extract from Master document"
+            ],
+            "output_format": "string"
+        },
+        "date_effective": {
+            "description": "Date when the contract goes into effect",
+            "allowed_values": "ANY",
+            "additional_instructions": [
+                "Look for phrases like 'Dated as <Date>' or 'as of <Date>'",
+                "In case of multiple documents, if there is an 'Attachment' document type, extract from Attachment; otherwise extract from Master document"
+            ],
+            "output_format": "string"
+        },
+        "parties": {
+            "description": "List of companies and individuals named in the contract; should always include WBD or one of its subsidiaries",
+            "allowed_values": "ANY",
+            "additional_instructions": [
+                "Should have Name of party and Type",
+                "A WBD entity will always be of type 'Primary'; all others will be 'Contracting entity'",
+                "You should have one 'Primary' and one 'Contracting entity'",
+                "Warner Bros. Domestic is not a WBD subsidiary"
+            ],
+            "output_format": "list"
+        }
+    }
+}

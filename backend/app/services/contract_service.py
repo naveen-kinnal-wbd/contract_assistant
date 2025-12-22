@@ -3,11 +3,14 @@ Contract processing service with async workflow management
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from ..models.schemas import (
+    AssetSelectionRequest,
     DocumentGroup,
     WorkflowStatus,
     WorkflowStep,
@@ -16,6 +19,20 @@ from ..models.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Load asset selection data from JSON file
+SAMPLES_DIR = Path(__file__).parent.parent.parent / "samples"
+ASSET_SELECTION_FILE = SAMPLES_DIR / "asset_selection.json"
+
+
+def load_asset_selection_data() -> list[dict]:
+    """Load asset selection options from JSON file"""
+    try:
+        with open(ASSET_SELECTION_FILE, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load asset selection data: {e}")
+        return []
 
 
 class ContractService:
@@ -29,6 +46,9 @@ class ContractService:
         """Retrieve current workflow progress for a document group"""
         return cls._workflow_store.get(group_id)
 
+    # Store for pending workflows awaiting selection
+    _pending_selection: dict[str, DocumentGroup] = {}
+
     @classmethod
     def _update_progress(
         cls,
@@ -39,6 +59,7 @@ class ContractService:
         status: WorkflowStatus,
         message: str,
         requires_feedback: bool = False,
+        selection_data: Optional[list[dict]] = None,
     ) -> WorkflowProgress:
         """Update workflow progress with a new step"""
         step = WorkflowStep(
@@ -48,6 +69,7 @@ class ContractService:
             message=message,
             timestamp=datetime.utcnow(),
             requires_feedback=requires_feedback,
+            selection_data=selection_data,
         )
 
         if group_id not in cls._workflow_store:
@@ -213,21 +235,26 @@ class ContractService:
 
             await asyncio.sleep(2)
 
-            # Step 4: Complete
-            logger.info(f"[{group_id}] Processing with blueprint refinement completed")
+            # Step 4: Asset Selection (pause for user input)
+            logger.info(f"[{group_id}] Awaiting asset selection")
+            asset_options = load_asset_selection_data()
+            cls._pending_selection[group_id] = document_group
+
             final_progress = cls._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
-                step_id="complete",
-                step_name="Processing Complete",
-                status=WorkflowStatus.COMPLETED,
-                message="Blueprint refinement and extraction completed successfully.",
+                step_id="asset_selection",
+                step_name="Asset Selection",
+                status=WorkflowStatus.AWAITING_FEEDBACK,
+                message="Please select an asset to continue.",
+                requires_feedback=True,
+                selection_data=asset_options,
             )
 
             return ProcessingResponse(
                 group_id=group_id,
-                status=WorkflowStatus.COMPLETED,
-                message="Blueprint refinement completed successfully.",
+                status=WorkflowStatus.AWAITING_FEEDBACK,
+                message="Awaiting asset selection.",
                 workflow_progress=final_progress,
             )
 
@@ -250,7 +277,82 @@ class ContractService:
             )
 
     @classmethod
+    async def continue_after_selection(
+        cls, request: AssetSelectionRequest
+    ) -> ProcessingResponse:
+        """
+        Continue the workflow after user selects an asset.
+        """
+        group_id = request.group_id
+        document_group = cls._pending_selection.get(group_id)
+        if not document_group:
+            return ProcessingResponse(
+                group_id=group_id,
+                status=WorkflowStatus.FAILED,
+                message="No pending selection found for this group.",
+            )
+
+        identifier_name = document_group.identifier_name
+
+        try:
+            # Mark selection received
+            logger.info(
+                f"[{group_id}] Asset selected: Deal {request.deal_id}, Asset {request.asset_id}"
+            )
+            cls._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="selection_received",
+                step_name="Asset Selection",
+                status=WorkflowStatus.IN_PROGRESS,
+                message=f"Asset selected: Deal {request.deal_id}, Asset {request.asset_id}",
+            )
+
+            await asyncio.sleep(1)
+
+            # Complete the workflow
+            logger.info(f"[{group_id}] Processing completed with selected asset")
+            final_progress = cls._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="complete",
+                step_name="Processing Complete",
+                status=WorkflowStatus.COMPLETED,
+                message=f"Blueprint refinement and extraction completed successfully for Deal {request.deal_id} and Asset {request.asset_id}.",
+            )
+
+            # Clean up pending selection
+            del cls._pending_selection[group_id]
+
+            return ProcessingResponse(
+                group_id=group_id,
+                status=WorkflowStatus.COMPLETED,
+                message=f"Processing completed for Deal {request.deal_id} and Asset {request.asset_id}.",
+                workflow_progress=final_progress,
+            )
+
+        except Exception as e:
+            logger.error(f"[{group_id}] Failed after selection: {e}")
+            final_progress = cls._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="error",
+                step_name="Error",
+                status=WorkflowStatus.FAILED,
+                message=f"Processing failed: {str(e)}",
+            )
+
+            return ProcessingResponse(
+                group_id=group_id,
+                status=WorkflowStatus.FAILED,
+                message=f"Processing failed: {str(e)}",
+                workflow_progress=final_progress,
+            )
+
+    @classmethod
     def clear_workflow(cls, group_id: str):
         """Clear workflow data for a document group"""
         if group_id in cls._workflow_store:
             del cls._workflow_store[group_id]
+        if group_id in cls._pending_selection:
+            del cls._pending_selection[group_id]
