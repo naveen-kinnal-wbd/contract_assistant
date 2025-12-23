@@ -2,6 +2,7 @@
 Contract Manager pane component
 """
 
+import base64
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import uuid
@@ -155,12 +156,17 @@ def render_contract_manager(api_client: ContractAPIClient):
                     else:
                         file_type = get_file_type_for_document(doc_type)
 
+                    # Read and base64 encode file content
+                    file_bytes = file_obj.getvalue()
+                    encoded_content = base64.b64encode(file_bytes).decode("utf-8")
+
                     documents.append(
                         DocumentMetadata(
                             filename=file_obj.name,
                             file_type=file_type,
                             size_bytes=file_obj.size,
                             content_type=file_obj.type,
+                            content=encoded_content,
                         )
                     )
 

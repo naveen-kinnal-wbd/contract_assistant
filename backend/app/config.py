@@ -29,3 +29,9 @@ def get_llm_config() -> dict[str, Any]:
     config = load_config()
     return config.get("llm", {})
 
+
+def get_processing_config() -> dict[str, Any]:
+    """Get processing configuration for image conversion"""
+    config = load_config()
+    return config.get("processing", {})
+

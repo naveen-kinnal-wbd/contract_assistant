@@ -8,6 +8,9 @@ python-multipart
 langgraph
 boto3
 
+# PDF Processing
+PyMuPDF
+
 # Testing
 pytest
 pytest-asyncio

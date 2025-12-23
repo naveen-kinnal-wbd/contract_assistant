@@ -25,3 +25,6 @@ class WorkflowState(TypedDict):
     uploaded_files: list[str]  # S3 keys of uploaded files
     upload_path: Optional[str]  # Base S3 path where files are uploaded
 
+    # Page images mapping: {file_type: {page_number: s3_uri}}
+    page_images: Optional[dict[str, dict[int, str]]]
+

@@ -1,10 +1,10 @@
 {
-    "base_info": {
+    "schema": {
         "contract_type": {
-        "description": "Specifies the type of agreement",
-        "allowed_values": ["Acquisition", "Co-production", "Commission", "Amendment"],
-        "additional_instructions": [],
-        "output_format": "string"
+            "description": "Specifies the type of agreement",
+            "allowed_values": ["Acquisition", "Co-production", "Commission", "Amendment"],
+            "additional_instructions": [],
+            "output_format": "string"
         },
         "contract_name": {
             "description": "Text describing the contract",
@@ -42,5 +42,37 @@
             ],
             "output_format": "list"
         }
-    }
+    },
+    "output": [
+        {
+            "field_name": "Contract Type",
+            "value": "<extracted_value>",
+            "source_text_chunk": "<exact text from document where value was found>"
+        },
+        {
+            "field_name": "Contract Name",
+            "value": "<extracted_value>",
+            "source_text_chunk": "<exact text from document where value was found>"
+        },
+        {
+            "field_name": "Date Executed",
+            "value": "<extracted_value>",
+            "source_text_chunk": "<exact text from document where value was found>"
+        },
+        {
+            "field_name": "Date Effective",
+            "value": "<extracted_value>",
+            "source_text_chunk": "<exact text from document where value was found>"
+        },
+        {
+            "field_name": "Parties",
+            "value": [
+                {
+                    "name": "<party_name>",
+                    "type": "<Primary or Contracting entity>"
+                }
+            ],
+            "source_text_chunk": "<exact text from document where parties are mentioned>"
+        }
+    ]
 }

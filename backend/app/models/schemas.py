@@ -41,6 +41,7 @@ class DocumentMetadata(BaseModel):
     file_type: FileType
     size_bytes: int = 0
     content_type: Optional[str] = None
+    content: Optional[str] = None  # Base64-encoded file content
 
 
 class DocumentGroup(BaseModel):

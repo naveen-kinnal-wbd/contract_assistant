@@ -8,10 +8,11 @@
     "anthropic_version": "bedrock-2023-05-31"
   },
   "processing": {
-    "image_format": "PNG",
+    "image_format": "jpeg",
     "image_dpi": 150,
     "max_pages": 50,
-    "saved_images_dir": "saved"
+    "saved_images_dir": "saved",
+    "convert_to_image": true
   },
   "upload": {
     "bucket": "contract-assistant-workflow",

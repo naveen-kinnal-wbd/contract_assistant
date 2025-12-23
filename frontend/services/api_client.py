@@ -43,6 +43,7 @@ class DocumentMetadata:
     file_type: FileType
     size_bytes: int = 0
     content_type: Optional[str] = None
+    content: Optional[str] = None  # Base64-encoded file content
 
     def to_dict(self):
         return {
@@ -50,6 +51,7 @@ class DocumentMetadata:
             "file_type": self.file_type.value,
             "size_bytes": self.size_bytes,
             "content_type": self.content_type,
+            "content": self.content,
         }
 
 
