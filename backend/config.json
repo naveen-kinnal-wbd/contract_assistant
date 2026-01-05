@@ -3,9 +3,13 @@
     "provider": "bedrock",
     "model_id": "anthropic.claude-3-sonnet-20240229-v1:0",
     "region": "us-east-1",
-    "max_tokens": 4096,
-    "temperature": 0.0,
-    "anthropic_version": "bedrock-2023-05-31"
+    "max_tokens": 65536,
+    "temperature": 0,
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_workers": 5,
+    "read_timeout": 1800,
+    "connect_timeout": 300,
+    "max_retries": 5
   },
   "processing": {
     "image_format": "jpeg",

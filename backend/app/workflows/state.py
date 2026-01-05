@@ -2,7 +2,7 @@
 Workflow state definitions for LangGraph workflows
 """
 
-from typing import Optional, TypedDict
+from typing import Any, Optional, TypedDict
 
 from ..models.schemas import DocumentGroup, WorkflowStatus
 
@@ -28,3 +28,5 @@ class WorkflowState(TypedDict):
     # Page images mapping: {file_type: {page_number: s3_uri}}
     page_images: Optional[dict[str, dict[int, str]]]
 
+    # Extracted base info from contract documents
+    extracted_base_info: Optional[dict[str, Any]]

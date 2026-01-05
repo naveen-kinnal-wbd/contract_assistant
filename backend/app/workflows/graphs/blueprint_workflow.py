@@ -10,6 +10,7 @@ from langgraph.graph import StateGraph, END
 from ...models.schemas import DocumentGroup, WorkflowStatus
 from ..state import WorkflowState
 from ..nodes.upload_node import upload_documents
+from ..nodes.base_info_extractor_node import base_info_extractor_agent
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +21,14 @@ def orchestrate_blueprint_refinement_workflow(
     """
     Create the blueprint refinement workflow graph.
 
-    The workflow currently includes:
+    The workflow includes:
     1. upload_documents - Upload files to S3
+    2. base_info_extractor_agent - Extract basic contract metadata using LLM
 
     Additional nodes can be added via the additional_nodes parameter.
 
     Args:
-        additional_nodes: List of (node_name, node_function) tuples to add after upload
+        additional_nodes: List of (node_name, node_function) tuples to add after extraction
 
     Returns:
         Compiled StateGraph workflow
@@ -34,15 +36,19 @@ def orchestrate_blueprint_refinement_workflow(
     # Create the graph with our state schema
     workflow = StateGraph(WorkflowState)
 
-    # Add the upload node
+    # Add the core nodes
     workflow.add_node("upload_documents", upload_documents)
+    workflow.add_node("base_info_extractor_agent", base_info_extractor_agent)
 
     # Set the entry point
     workflow.set_entry_point("upload_documents")
 
-    # Add any additional nodes
+    # Connect upload to base info extraction
+    workflow.add_edge("upload_documents", "base_info_extractor_agent")
+
+    # Add any additional nodes after base_info_extractor_agent
     if additional_nodes:
-        prev_node = "upload_documents"
+        prev_node = "base_info_extractor_agent"
         for node_name, node_func in additional_nodes:
             workflow.add_node(node_name, node_func)
             workflow.add_edge(prev_node, node_name)
@@ -50,8 +56,8 @@ def orchestrate_blueprint_refinement_workflow(
         # Connect last node to END
         workflow.add_edge(prev_node, END)
     else:
-        # If no additional nodes, connect upload directly to END
-        workflow.add_edge("upload_documents", END)
+        # If no additional nodes, connect extraction directly to END
+        workflow.add_edge("base_info_extractor_agent", END)
 
     return workflow.compile()
 
@@ -79,6 +85,8 @@ async def run_blueprint_refinement_workflow(
         "error_message": None,
         "uploaded_files": [],
         "upload_path": None,
+        "page_images": None,
+        "extracted_base_info": None,
     }
 
     # Create and run the workflow

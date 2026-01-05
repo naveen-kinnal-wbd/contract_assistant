@@ -41,38 +41,12 @@
                 "Warner Bros. Domestic is not a WBD subsidiary"
             ],
             "output_format": "list"
+        },
+        "programs": {
+            "description": "List of titles of a movie, series, or other media asset being acquired or produced for exhibition.",
+            "allowed_values": "ANY",
+            "additional_instructions": [],
+            "output_format": "list"
         }
-    },
-    "output": [
-        {
-            "field_name": "Contract Type",
-            "value": "<extracted_value>",
-            "source_text_chunk": "<exact text from document where value was found>"
-        },
-        {
-            "field_name": "Contract Name",
-            "value": "<extracted_value>",
-            "source_text_chunk": "<exact text from document where value was found>"
-        },
-        {
-            "field_name": "Date Executed",
-            "value": "<extracted_value>",
-            "source_text_chunk": "<exact text from document where value was found>"
-        },
-        {
-            "field_name": "Date Effective",
-            "value": "<extracted_value>",
-            "source_text_chunk": "<exact text from document where value was found>"
-        },
-        {
-            "field_name": "Parties",
-            "value": [
-                {
-                    "name": "<party_name>",
-                    "type": "<Primary or Contracting entity>"
-                }
-            ],
-            "source_text_chunk": "<exact text from document where parties are mentioned>"
-        }
-    ]
+    }
 }
