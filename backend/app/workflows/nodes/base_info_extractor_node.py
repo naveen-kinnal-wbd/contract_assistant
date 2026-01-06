@@ -69,7 +69,7 @@ BASE_INFO_SCHEMA = {
             "description": "List of companies and individuals named in the contract; should always include WBD or one of its subsidiaries",
             "allowed_values": "ANY",
             "additional_instructions": [
-                "Should have Name of party and Type",
+                "Should have Value of party and Type",
                 "A WBD entity will always be of type 'Primary'; all others will be 'Contracting entity'",
                 "You should have one 'Primary' and one 'Contracting entity'",
                 "Warner Bros. Domestic is not a WBD subsidiary",
@@ -90,19 +90,32 @@ SYSTEM_PROMPT = f"""
 
     Your task is to extract metadata from a SINGLE PAGE of a media contract.
     The page is provided as an image. 
-    Take the provided JSON Schema <INPUT_SCHEMA> as a reference to understand the fields, its description, and its allowed values.
+    Take the provided JSON Schema <INPUT_SCHEMA> as a reference to understand the fields, its description, its output format, and its allowed values.
 
     <INPUT_SCHEMA>
     {BASE_INFO_SCHEMA}
     </INPUT_SCHEMA>
 
     CRITICAL RULES:
-    - Only extract information that is explicitly visible on this page.
+    - When extracting metadata, you must follow the list of additional_instructions for each JSON field that is specified in the <INPUT_SCHEMA> schema, if it exists. The list of additional_instructions describe how to interpret contract language, how to resolve ambiguity, and how to choose values. Always treat the all of the rules mentioned in the additional_instructions list as authoritative rules.
+    - If the list of allowed_values are explicitly specified in the <INPUT_SCHEMA> schema, you must match the extracted value to the allowed_values.
+    - If the allowed_values are specified as "ANY", you can extract any value that is relevant to the field.
+    - You must strictly follow the output_format defined in the <INPUT_SCHEMA> schema and the below 9 critical rules.
+        1. If output_format = "string" → return a JSON string value (not a list).
+        2. If output_format = "list" → always return a JSON array.
+        3. If multiple values appear for a list field, return all values as a list.
+        4. If one value appears for a list field, return a single-item list.
+        5. If no values appear for a list field, return an empty list ([]).
+        6. Never return a string where a list is required.
+        7. Never return a list where a string is required.
+        8. Do not add fields that are not in the blueprint.
+        9. Do not change field names. 
+    - Only extract information that is explicitly visible on this page. 
     - Do NOT infer or guess values from other pages.
-    - If a field is not present on this page, do not fabricate it.
     - All bounding boxes MUST correspond exactly to the visible source text.
     - Bounding boxes must be in image pixel coordinates: [x1, y1, x2, y2].
     - Return structured JSON only. No explanations or commentary.
+    - All fields must be present, even if there are no values found on this page, with a confidence score of 0.0.
 """
 
 USER_PROMPT = f"""
@@ -114,19 +127,19 @@ USER_PROMPT = f"""
 
     Return all detected metadata fields as per the above <INPUT_SCHEMA> found on this page, using the below output format for each field:
     {{
-        "page_number": <integer>,
         "page_has_contract_content": <boolean>,
-        "extractions": [
-            {{
-            "field_name": "<one of the target metadata fields>",
-            "value": "<exact extracted text>",
-            "bbox": [x1, y1, x2, y2],
-            "confidence": <float between 0.0 and 1.0>
-            }}
-        ]
+        "extractions": {{
+            "<field_name>": {{
+                "value": "<exact extracted text>",
+                "bbox": [x1, y1, x2, y2],
+                "confidence": <float between 0.0 and 1.0>
+                "page_number": <integer>
+            }},
+            ...
+        }}
     }}
 
-    If no metadata fields are found on this page, return an empty list for the "extractions" key.
+    If no metadata fields are found on this page, return an empty object for the "extractions" key.
 """
 
 # ============================================================================
@@ -241,14 +254,14 @@ def aggregate_page_extractions(
     Aggregate page-level extractions into document-level metadata.
 
     For each field in the schema, pick the highest-confidence candidate
-    from across all pages.
+    from across all pages, preserving bbox and confidence.
 
     Args:
         page_results: List of extraction results from each page
         schema: The base info schema defining expected fields
 
     Returns:
-        Aggregated metadata dictionary
+        Aggregated metadata dictionary with full extraction info
     """
     aggregated = {}
     schema_fields = schema.get("schema", {})
@@ -257,57 +270,42 @@ def aggregate_page_extractions(
         output_format = field_config.get("output_format", "string")
         candidates = []
 
-        # Collect all non-empty values for this field from all pages
+        # Collect all extractions for this field from all pages
         for result in page_results:
             if not result.get("success") or not result.get("extracted_data"):
                 continue
 
-            extracted_data = result["extracted_data"]
-            if field_name in extracted_data:
-                value = extracted_data[field_name]
-                confidence = extracted_data.get(f"{field_name}_confidence", 0.5)
+            extractions = result["extracted_data"].get("extractions", {})
+            if field_name not in extractions:
+                continue
 
-                if value is not None and value != "" and value != []:
-                    candidates.append(
-                        {
-                            "value": value,
-                            "confidence": confidence,
-                            "page": result.get("metadata", {}).get("page_number", 0),
-                        }
-                    )
+            field_data = extractions[field_name]
+            # Normalize to list for uniform processing
+            items = field_data if isinstance(field_data, list) else [field_data]
+            candidates.extend(items)
 
         # Select best candidate based on output format
         if not candidates:
-            # No value found for this field
             aggregated[field_name] = [] if output_format == "list" else None
             continue
 
         if output_format == "list":
-            # For lists, merge all unique items
-            merged_list = []
-            seen = set()
-            for candidate in candidates:
-                items = (
-                    candidate["value"]
-                    if isinstance(candidate["value"], list)
-                    else [candidate["value"]]
-                )
-                for item in items:
-                    # Create a hashable representation for deduplication
-                    if isinstance(item, dict):
-                        item_key = json.dumps(item, sort_keys=True)
-                    else:
-                        item_key = str(item)
+            # Find unique items by value, keeping highest confidence for each
+            unique_items = {}
+            for item in candidates:
+                value_key = str(item.get("value"))
 
-                    if item_key not in seen:
-                        seen.add(item_key)
-                        merged_list.append(item)
+                # Keep item with highest confidence for each unique value
+                if value_key not in unique_items or item.get(
+                    "confidence", 0
+                ) > unique_items[value_key].get("confidence", 0):
+                    unique_items[value_key] = item
 
-            aggregated[field_name] = merged_list
+            aggregated[field_name] = list(unique_items.values())
         else:
-            # For string/scalar fields, pick highest confidence
-            best = max(candidates, key=lambda x: x["confidence"])
-            aggregated[field_name] = best["value"]
+            # For string fields, pick the dict with highest confidence
+            best = max(candidates, key=lambda x: x.get("confidence", 0))
+            aggregated[field_name] = best
 
     return aggregated
 
