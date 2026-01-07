@@ -18,8 +18,10 @@ from ..models.schemas import (
     WorkflowProgress,
     ProcessingResponse,
 )
-from ..workflows.graphs.blueprint_workflow import run_blueprint_refinement_workflow
-from ..workflows.state import WorkflowState
+from ..workflows.graphs.blueprint_workflow import (
+    run_blueprint_refinement_workflow,
+    resume_workflow_with_selection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +54,8 @@ class ContractService:
     # Store for pending workflows awaiting asset selection
     _pending_selection: dict[str, DocumentGroup] = {}
 
-    # Store for pending program selections (includes full workflow state)
-    _pending_program_selection: dict[str, WorkflowState] = {}
+    # Note: Program selection state is now managed by LangGraph's checkpointer
+    # instead of manual _pending_program_selection dict
 
     @classmethod
     def initialize_workflow_progress(
@@ -249,12 +251,13 @@ class ContractService:
                     workflow_progress=cls.get_workflow_progress(group_id),
                 )
 
-            # Check if workflow is awaiting program selection
+            # Check if workflow is awaiting program selection (interrupted)
             if final_state["status"] == WorkflowStatus.AWAITING_FEEDBACK:
-                logger.info(f"[{group_id}] Workflow awaiting program selection")
-                # Store the workflow state for later continuation
-                cls._pending_program_selection[group_id] = final_state
-
+                logger.info(
+                    f"[{group_id}] Workflow interrupted - awaiting program selection"
+                )
+                # State is automatically persisted by LangGraph's checkpointer
+                # Use resume_workflow_with_selection() to continue after user selects
                 return ProcessingResponse(
                     group_id=group_id,
                     status=WorkflowStatus.AWAITING_FEEDBACK,
@@ -378,25 +381,21 @@ class ContractService:
         """
         Continue the workflow after user selects a program.
 
+        Uses LangGraph's interrupt resume mechanism to continue
+        the workflow from where it paused at program_selector_node.
+
         This method:
-        1. Retrieves the stored workflow state
-        2. Updates the selected_program in state
-        3. Updates progress to show the selection was received
-        4. Completes the workflow (or continues to next steps if any)
+        1. Builds the selected program dict from the request
+        2. Resumes the workflow using Command(resume=selected_program)
+        3. The workflow continues from the interrupt point to completion
         """
         group_id = request.group_id
-        workflow_state = cls._pending_program_selection.get(group_id)
 
-        if not workflow_state:
-            logger.error(f"[{group_id}] No pending program selection found")
-            return ProcessingResponse(
-                group_id=group_id,
-                status=WorkflowStatus.FAILED,
-                message="No pending program selection found for this group.",
-            )
-
-        document_group = workflow_state["document_group"]
-        identifier_name = document_group.identifier_name
+        # Get identifier_name from current progress if available
+        identifier_name = ""
+        progress = cls.get_workflow_progress(group_id)
+        if progress:
+            identifier_name = progress.identifier_name
 
         try:
             # Build the selected program dict from request
@@ -409,85 +408,49 @@ class ContractService:
                 "date_executed": request.date_executed,
             }
 
-            logger.info(f"[{group_id}] Program selected: {request.program_name}")
-
-            # Update progress - selection received
-            cls._update_progress(
-                group_id=group_id,
-                identifier_name=identifier_name,
-                step_id="program_selected",
-                step_name="Program Selection",
-                status=WorkflowStatus.IN_PROGRESS,
-                message=f"Program selected: {request.program_name}",
+            logger.info(
+                f"[{group_id}] Resuming workflow with program: {request.program_name}"
             )
 
-            # Display the selected program details
-            details_parts = [f"Program: {request.program_name}"]
-            if request.contract_type:
-                details_parts.append(f"Contract Type: {request.contract_type}")
-            if request.contract_name:
-                details_parts.append(f"Contract Name: {request.contract_name}")
-            if request.date_effective:
-                details_parts.append(f"Effective Date: {request.date_effective}")
-            if request.date_executed:
-                details_parts.append(f"Executed Date: {request.date_executed}")
-            if request.parties:
-                party_names = [
-                    p.get("value", str(p)) if isinstance(p, dict) else str(p)
-                    for p in request.parties
-                ]
-                details_parts.append(f"Parties: {', '.join(party_names)}")
-
-            details_message = " | ".join(details_parts)
-
-            cls._update_progress(
+            # Resume the workflow with the selection using LangGraph interrupt resume
+            final_state = await resume_workflow_with_selection(
                 group_id=group_id,
-                identifier_name=identifier_name,
-                step_id="program_details",
-                step_name="Selected Program Details",
-                status=WorkflowStatus.IN_PROGRESS,
-                message=details_message,
+                selected_program=selected_program,
             )
 
-            await asyncio.sleep(0.5)  # Brief pause for UI update
-
-            # Complete the workflow
-            logger.info(f"[{group_id}] Processing completed with selected program")
-            final_progress = cls._update_progress(
-                group_id=group_id,
-                identifier_name=identifier_name,
-                step_id="complete",
-                step_name="Processing Complete",
-                status=WorkflowStatus.COMPLETED,
-                message=f"Blueprint refinement completed successfully for program: {request.program_name}",
-            )
-
-            # Clean up pending selection
-            del cls._pending_program_selection[group_id]
+            # Return response based on final state
+            if final_state.get("status") == WorkflowStatus.FAILED:
+                error_msg = final_state.get("error_message", "Workflow failed")
+                return ProcessingResponse(
+                    group_id=group_id,
+                    status=WorkflowStatus.FAILED,
+                    message=error_msg,
+                    workflow_progress=cls.get_workflow_progress(group_id),
+                )
 
             return ProcessingResponse(
                 group_id=group_id,
                 status=WorkflowStatus.COMPLETED,
                 message=f"Processing completed for program: {request.program_name}",
-                workflow_progress=final_progress,
+                workflow_progress=cls.get_workflow_progress(group_id),
             )
 
         except Exception as e:
-            logger.error(f"[{group_id}] Failed after program selection: {e}")
-            final_progress = cls._update_progress(
+            logger.error(f"[{group_id}] Failed to resume workflow: {e}")
+            cls._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
                 step_id="error",
                 step_name="Error",
                 status=WorkflowStatus.FAILED,
-                message=f"Processing failed: {str(e)}",
+                message=f"Failed to resume workflow: {str(e)}",
             )
 
             return ProcessingResponse(
                 group_id=group_id,
                 status=WorkflowStatus.FAILED,
-                message=f"Processing failed: {str(e)}",
-                workflow_progress=final_progress,
+                message=f"Failed to resume workflow: {str(e)}",
+                workflow_progress=cls.get_workflow_progress(group_id),
             )
 
     @classmethod
@@ -497,5 +460,5 @@ class ContractService:
             del cls._workflow_store[group_id]
         if group_id in cls._pending_selection:
             del cls._pending_selection[group_id]
-        if group_id in cls._pending_program_selection:
-            del cls._pending_program_selection[group_id]
+        # Note: LangGraph checkpointer state is not cleared here
+        # In production with persistent checkpointer, you may want to clear that too

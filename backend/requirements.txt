@@ -6,6 +6,7 @@ python-multipart
 
 # LangGraph Workflow
 langgraph
+langgraph-checkpoint  # For interrupt/resume (human-in-the-loop) support
 boto3
 
 # PDF Processing

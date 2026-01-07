@@ -103,7 +103,9 @@ def render_asset_selection_table(group_id: str, selection_data: list[dict], api_
                 st.error(f"Failed to submit selection: {str(e)}")
 
 
-def render_program_selection_table(group_id: str, selection_data: list[dict], api_client):
+def render_program_selection_table(
+    group_id: str, selection_data: list[dict], api_client
+):
     """Render the program selection table with Select buttons"""
     if not selection_data:
         return
