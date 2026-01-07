@@ -1,5 +1,5 @@
 """
-Contract Manager pane component
+Contracts Manager pane component
 """
 
 import base64
@@ -32,8 +32,8 @@ def get_file_type_for_document(
 
 
 def render_contract_manager(api_client: ContractAPIClient):
-    """Render the Contract Manager pane"""
-    st.markdown("### Contract Manager")
+    """Render the Contracts Manager pane"""
+    st.markdown("### Contracts Manager")
     st.caption("Upload and process contract documents for metadata extraction")
 
     # Initialize session state for document groups

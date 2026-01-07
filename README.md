@@ -32,7 +32,7 @@ contract_assistant/
 
 ## Features
 
-### Contract Manager
+### Contracts Manager
 - Upload contract documents (PDF, DOCX, DOC)
 - Support for three document types:
   - **Standalone**: Single contract document

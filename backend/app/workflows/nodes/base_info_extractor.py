@@ -5,6 +5,7 @@ This node extracts basic contract metadata from document images using
 AWS Bedrock LLM with parallel processing per page.
 """
 
+import asyncio
 import json
 import logging
 from functools import lru_cache
@@ -424,7 +425,9 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
                     {
                         "user_prompt": USER_PROMPT,
                         "images": [(image_bytes, media_type)],
-                        "system_prompt": SYSTEM_PROMPT if SYSTEM_PROMPT.strip() else None,
+                        "system_prompt": (
+                            SYSTEM_PROMPT if SYSTEM_PROMPT.strip() else None
+                        ),
                         "metadata": {
                             "file_type": page_info["file_type"],
                             "page_number": page_info["page_number"],
@@ -442,8 +445,12 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
                 message=f"Extracting information from {total_pages} page(s) in parallel...",
             )
 
-            # Make parallel LLM calls
-            llm_results = bedrock_client.invoke_parallel(requests)
+            # Make parallel LLM calls in a thread pool to avoid blocking the event loop
+            # This allows FastAPI to continue serving progress poll requests during extraction
+            loop = asyncio.get_event_loop()
+            llm_results = await loop.run_in_executor(
+                None, bedrock_client.invoke_parallel, requests
+            )
 
             # Process results
             page_extractions = []
@@ -494,7 +501,9 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
 
             aggregated_info = aggregate_page_extractions(page_extractions, schema)
 
-            self.logger.info(f"[{group_id}] Base info extraction completed successfully")
+            self.logger.info(
+                f"[{group_id}] Base info extraction completed successfully"
+            )
 
             self._update_progress(
                 group_id=group_id,

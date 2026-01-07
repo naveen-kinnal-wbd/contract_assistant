@@ -1,6 +1,7 @@
 """
 Contract Assistance - Streamlit Frontend Application
 """
+
 import streamlit as st
 from services.api_client import ContractAPIClient
 from components.contract_manager import render_contract_manager
@@ -203,22 +204,22 @@ def main():
     """Main application entry point"""
     # Initialize API client
     api_client = init_api_client()
-    
+
     # Sidebar navigation
     with st.sidebar:
         st.markdown(
             '<div class="sidebar-header">📄 Contract Assistance</div>',
             unsafe_allow_html=True,
         )
-        
+
         # Navigation
         selected_pane = st.radio(
             "Navigation",
-            options=["Contract Manager", "Blueprint Manager"],
+            options=["Contracts Manager", "Blueprint Manager"],
             index=0,
             label_visibility="collapsed",
         )
-        
+
         # API status indicator
         st.markdown("---")
         try:
@@ -253,18 +254,22 @@ def main():
                 """,
                 unsafe_allow_html=True,
             )
-    
+
     # Main content area
-    if selected_pane == "Contract Manager":
-        st.markdown('<h1 class="main-header">Contract Manager</h1>', unsafe_allow_html=True)
+    if selected_pane == "Contracts Manager":
+        st.markdown(
+            '<h1 class="main-header">Contracts Manager</h1>', unsafe_allow_html=True
+        )
         st.markdown(
             '<p class="main-subtitle">Upload contracts and track metadata extraction progress</p>',
             unsafe_allow_html=True,
         )
         render_contract_manager(api_client)
-    
+
     elif selected_pane == "Blueprint Manager":
-        st.markdown('<h1 class="main-header">Blueprint Manager</h1>', unsafe_allow_html=True)
+        st.markdown(
+            '<h1 class="main-header">Blueprint Manager</h1>', unsafe_allow_html=True
+        )
         st.markdown(
             '<p class="main-subtitle">Manage and view extraction blueprints</p>',
             unsafe_allow_html=True,
@@ -274,4 +279,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

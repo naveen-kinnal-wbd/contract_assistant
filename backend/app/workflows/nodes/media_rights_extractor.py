@@ -5,6 +5,7 @@ This node extracts media rights information from contract document images using
 AWS Bedrock LLM with parallel processing per page.
 """
 
+import asyncio
 import json
 import logging
 from functools import lru_cache
@@ -454,8 +455,12 @@ class MediaRightsExtractorNode(BaseWorkflowNode):
                 message=f"Extracting media rights from {total_pages} page(s) in parallel...",
             )
 
-            # Make parallel LLM calls
-            llm_results = bedrock_client.invoke_parallel(requests)
+            # Make parallel LLM calls in a thread pool to avoid blocking the event loop
+            # This allows FastAPI to continue serving progress poll requests during extraction
+            loop = asyncio.get_event_loop()
+            llm_results = await loop.run_in_executor(
+                None, bedrock_client.invoke_parallel, requests
+            )
 
             # Process results
             page_extractions = []
