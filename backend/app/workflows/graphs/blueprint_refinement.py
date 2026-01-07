@@ -14,9 +14,9 @@ from langgraph.types import Command
 
 from ...models.schemas import DocumentGroup, WorkflowStatus
 from ..state import WorkflowState
-from ..nodes.upload_node import upload_documents
-from ..nodes.base_info_extractor_node import base_info_extractor_agent
-from ..nodes.program_selector_node import program_selector_node
+from ..nodes.contract_uploader import upload_documents
+from ..nodes.base_info_extractor import base_info_extractor_agent
+from ..nodes.asset_selector import asset_selector
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ def get_workflow() -> Any:
         # Add nodes
         workflow.add_node("upload_documents", upload_documents)
         workflow.add_node("base_info_extractor_agent", base_info_extractor_agent)
-        workflow.add_node("program_selector_node", program_selector_node)
+        workflow.add_node("asset_selector", asset_selector)
         workflow.add_node("finalize", finalize_workflow)
 
         # Set entry point
@@ -116,8 +116,8 @@ def get_workflow() -> Any:
 
         # Connect edges
         workflow.add_edge("upload_documents", "base_info_extractor_agent")
-        workflow.add_edge("base_info_extractor_agent", "program_selector_node")
-        workflow.add_edge("program_selector_node", "finalize")
+        workflow.add_edge("base_info_extractor_agent", "asset_selector")
+        workflow.add_edge("asset_selector", "finalize")
         workflow.add_edge("finalize", END)
 
         # Compile with checkpointer for interrupt support
@@ -138,7 +138,7 @@ def orchestrate_blueprint_refinement_workflow(
     The workflow includes:
     1. upload_documents - Upload files to S3
     2. base_info_extractor_agent - Extract basic contract metadata using LLM
-    3. program_selector_node - Transform extracted info and await user program selection
+    3. asset_selector - Transform extracted info and await user program selection
     4. finalize - Complete the workflow after selection
 
     Args:
@@ -153,7 +153,7 @@ def orchestrate_blueprint_refinement_workflow(
     # Add the core nodes
     workflow.add_node("upload_documents", upload_documents)
     workflow.add_node("base_info_extractor_agent", base_info_extractor_agent)
-    workflow.add_node("program_selector_node", program_selector_node)
+    workflow.add_node("asset_selector", asset_selector)
     workflow.add_node("finalize", finalize_workflow)
 
     # Set the entry point
@@ -163,10 +163,10 @@ def orchestrate_blueprint_refinement_workflow(
     workflow.add_edge("upload_documents", "base_info_extractor_agent")
 
     # Connect base info extraction to program selector
-    workflow.add_edge("base_info_extractor_agent", "program_selector_node")
+    workflow.add_edge("base_info_extractor_agent", "asset_selector")
 
     # Connect program selector to finalize
-    workflow.add_edge("program_selector_node", "finalize")
+    workflow.add_edge("asset_selector", "finalize")
 
     # Add any additional nodes after finalize
     if additional_nodes:
@@ -191,7 +191,7 @@ async def run_blueprint_refinement_workflow(
     Run the blueprint refinement workflow for a document group.
 
     The workflow will run until completion, failure, or an interrupt.
-    When the workflow hits an interrupt (at program_selector_node),
+    When the workflow hits an interrupt (at asset_selector),
     it returns immediately with the current state. The state is
     automatically persisted by the checkpointer.
 

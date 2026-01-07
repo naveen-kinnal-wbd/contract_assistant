@@ -150,7 +150,7 @@ def transform_to_program_options(
     return program_options
 
 
-async def program_selector_node(state: WorkflowState) -> dict[str, Any]:
+async def asset_selector(state: WorkflowState) -> dict[str, Any]:
     """
     Transform extracted base info into program selection options and
     use interrupt() to pause for user selection.

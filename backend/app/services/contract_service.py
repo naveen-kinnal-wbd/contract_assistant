@@ -18,7 +18,7 @@ from ..models.schemas import (
     WorkflowProgress,
     ProcessingResponse,
 )
-from ..workflows.graphs.blueprint_workflow import (
+from ..workflows.graphs.blueprint_refinement import (
     run_blueprint_refinement_workflow,
     resume_workflow_with_selection,
 )
@@ -382,7 +382,7 @@ class ContractService:
         Continue the workflow after user selects a program.
 
         Uses LangGraph's interrupt resume mechanism to continue
-        the workflow from where it paused at program_selector_node.
+        the workflow from where it paused at asset_selector.
 
         This method:
         1. Builds the selected program dict from the request
