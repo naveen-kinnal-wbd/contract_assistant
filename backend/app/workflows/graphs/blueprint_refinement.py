@@ -14,9 +14,10 @@ from langgraph.types import Command
 
 from ...models.schemas import DocumentGroup, WorkflowStatus
 from ..state import WorkflowState
-from ..nodes.contract_uploader import upload_documents
-from ..nodes.base_info_extractor import base_info_extractor_agent
-from ..nodes.asset_selector import asset_selector
+from ..nodes.contract_uploader import ContractUploaderNode
+from ..nodes.base_info_extractor import BaseInfoExtractorNode
+from ..nodes.asset_selector import AssetSelectorNode
+from ..nodes.finalize import FinalizeWorkflowNode
 
 logger = logging.getLogger(__name__)
 
@@ -26,71 +27,6 @@ _checkpointer = MemorySaver()
 
 # Cached compiled workflow
 _compiled_workflow = None
-
-
-async def finalize_workflow(state: WorkflowState) -> dict[str, Any]:
-    """
-    Final node to complete the workflow after program selection.
-
-    This node runs after the user has selected a program and
-    marks the workflow as completed.
-    """
-    document_group = state["document_group"]
-    group_id = document_group.group_id
-    identifier_name = document_group.identifier_name
-    selected_program = state.get("selected_program")
-
-    # Skip if workflow already failed
-    if state.get("status") == WorkflowStatus.FAILED:
-        return {}
-
-    logger.info(f"[{group_id}] Finalizing workflow")
-
-    # Import here to avoid circular dependency
-    from ...services.contract_service import ContractService
-
-    program_name = "Unknown"
-    if selected_program:
-        program_name = selected_program.get("program_name", "Unknown")
-
-    # Build completion message with selected program details
-    details_parts = [f"Program: {program_name}"]
-    if selected_program:
-        if selected_program.get("contract_type"):
-            details_parts.append(f"Contract Type: {selected_program['contract_type']}")
-        if selected_program.get("contract_name"):
-            details_parts.append(f"Contract Name: {selected_program['contract_name']}")
-        if selected_program.get("date_effective"):
-            details_parts.append(
-                f"Effective Date: {selected_program['date_effective']}"
-            )
-        if selected_program.get("date_executed"):
-            details_parts.append(f"Executed Date: {selected_program['date_executed']}")
-        if selected_program.get("parties"):
-            party_names = [
-                p.get("value", str(p)) if isinstance(p, dict) else str(p)
-                for p in selected_program["parties"]
-            ]
-            if party_names:
-                details_parts.append(f"Parties: {', '.join(party_names)}")
-
-    details_message = " | ".join(details_parts)
-
-    ContractService._update_progress(
-        group_id=group_id,
-        identifier_name=identifier_name,
-        step_id="complete",
-        step_name="Processing Complete",
-        status=WorkflowStatus.COMPLETED,
-        message=f"Blueprint refinement completed. {details_message}",
-    )
-
-    logger.info(f"[{group_id}] Workflow completed for program: {program_name}")
-
-    return {
-        "status": WorkflowStatus.COMPLETED,
-        "current_step": "complete",
-    }
 
 
 def get_workflow() -> Any:
@@ -105,11 +41,11 @@ def get_workflow() -> Any:
     if _compiled_workflow is None:
         workflow = StateGraph(WorkflowState)
 
-        # Add nodes
-        workflow.add_node("upload_documents", upload_documents)
-        workflow.add_node("base_info_extractor_agent", base_info_extractor_agent)
-        workflow.add_node("asset_selector", asset_selector)
-        workflow.add_node("finalize", finalize_workflow)
+        # Add nodes - instantiate classes here (callable via __call__)
+        workflow.add_node("upload_documents", ContractUploaderNode())
+        workflow.add_node("base_info_extractor_agent", BaseInfoExtractorNode())
+        workflow.add_node("asset_selector", AssetSelectorNode())
+        workflow.add_node("finalize", FinalizeWorkflowNode())
 
         # Set entry point
         workflow.set_entry_point("upload_documents")
@@ -150,11 +86,11 @@ def orchestrate_blueprint_refinement_workflow(
     # Create the graph with our state schema
     workflow = StateGraph(WorkflowState)
 
-    # Add the core nodes
-    workflow.add_node("upload_documents", upload_documents)
-    workflow.add_node("base_info_extractor_agent", base_info_extractor_agent)
-    workflow.add_node("asset_selector", asset_selector)
-    workflow.add_node("finalize", finalize_workflow)
+    # Add the core nodes - instantiate classes here (callable via __call__)
+    workflow.add_node("upload_documents", ContractUploaderNode())
+    workflow.add_node("base_info_extractor_agent", BaseInfoExtractorNode())
+    workflow.add_node("asset_selector", AssetSelectorNode())
+    workflow.add_node("finalize", FinalizeWorkflowNode())
 
     # Set the entry point
     workflow.set_entry_point("upload_documents")
@@ -269,7 +205,6 @@ async def resume_workflow_with_selection(
 
     # Update state to set the awaiting flag BEFORE resuming
     # This allows the node to detect it's resuming and skip duplicate progress updates
-    # When the node re-executes on resume, it will see this flag in state
     workflow.update_state(
         config,
         {"awaiting_program_selection": True},

@@ -8,8 +8,7 @@ AWS Bedrock LLM with parallel processing per page.
 import json
 import logging
 from functools import lru_cache
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -18,6 +17,7 @@ from ...config import get_llm_config, get_upload_config
 from ...models.schemas import WorkflowStatus
 from ...services.bedrock_client import BedrockClient
 from ..state import WorkflowState
+from .base import BaseWorkflowNode
 
 logger = logging.getLogger(__name__)
 
@@ -210,38 +210,6 @@ def fetch_image_from_s3(s3_uri: str) -> tuple[bytes, str]:
 
 
 # ============================================================================
-# Progress Update Helper
-# ============================================================================
-
-
-def _update_workflow_progress(
-    group_id: str,
-    identifier_name: str,
-    step_id: str,
-    step_name: str,
-    status: WorkflowStatus,
-    message: str,
-) -> None:
-    """
-    Update workflow progress in the ContractService store.
-    Uses late import to avoid circular dependency.
-    """
-    try:
-        from ...services.contract_service import ContractService
-
-        ContractService._update_progress(
-            group_id=group_id,
-            identifier_name=identifier_name,
-            step_id=step_id,
-            step_name=step_name,
-            status=status,
-            message=message,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to update workflow progress: {e}")
-
-
-# ============================================================================
 # Result Aggregation
 # ============================================================================
 
@@ -349,208 +317,214 @@ def parse_llm_response(response_text: str) -> dict[str, Any]:
 
 
 # ============================================================================
-# Main Agent Node
+# Main Agent Node Class
 # ============================================================================
 
 
-async def base_info_extractor_agent(state: WorkflowState) -> dict[str, Any]:
+class BaseInfoExtractorNode(BaseWorkflowNode):
     """
     Extract basic contract information from document images using LLM.
 
     This agent:
     1. Fetches images from S3 using page_images from state
-    2. Reads the blueprint schema from base_info.json
+    2. Uses the BASE_INFO_SCHEMA for extraction
     3. Makes parallel LLM calls (one per page image)
     4. Aggregates results and picks highest-confidence values
-
-    Args:
-        state: Current workflow state containing page_images
-
-    Returns:
-        Updated state fields with extracted_base_info
     """
-    document_group = state["document_group"]
-    group_id = document_group.group_id
-    identifier_name = document_group.identifier_name
-    page_images = state.get("page_images")
 
-    logger.info(f"[{group_id}] Starting base info extraction")
+    def __init__(self):
+        super().__init__("BaseInfoExtractor")
 
-    # Update progress
-    _update_workflow_progress(
-        group_id=group_id,
-        identifier_name=identifier_name,
-        step_id="base_info_starting",
-        step_name="Base Info Extraction",
-        status=WorkflowStatus.IN_PROGRESS,
-        message="Starting contract information extraction...",
-    )
+    async def execute(self, state: WorkflowState) -> dict[str, Any]:
+        """
+        Extract basic contract information from document images.
 
-    # Check if we have images to process
-    if not page_images:
-        error_msg = "No page images available for extraction"
-        logger.error(f"[{group_id}] {error_msg}")
+        Args:
+            state: Current workflow state containing page_images
 
-        _update_workflow_progress(
+        Returns:
+            Updated state fields with extracted_base_info
+        """
+        group_id, identifier_name, document_group = self._get_context(state)
+        page_images = state.get("page_images")
+
+        self.logger.info(f"[{group_id}] Starting base info extraction")
+
+        # Update progress
+        self._update_progress(
             group_id=group_id,
             identifier_name=identifier_name,
-            step_id="base_info_failed",
-            step_name="Base Info Extraction",
-            status=WorkflowStatus.FAILED,
-            message=error_msg,
-        )
-
-        return {
-            "status": WorkflowStatus.FAILED,
-            "current_step": "base_info_failed",
-            "error_message": error_msg,
-            "extracted_base_info": None,
-        }
-
-    try:
-        # Load the schema
-        schema = BASE_INFO_SCHEMA
-
-        # Initialize Bedrock client
-        bedrock_client = BedrockClient()
-
-        # Collect all page images from all file types
-        all_pages = []
-        for file_type, pages in page_images.items():
-            for page_num, s3_uri in pages.items():
-                all_pages.append(
-                    {
-                        "file_type": file_type,
-                        "page_number": page_num,
-                        "s3_uri": s3_uri,
-                    }
-                )
-                break  # Only process one page per file type for now since the base info should reside in the 1st page mostly
-
-        total_pages = len(all_pages)
-        logger.info(f"[{group_id}] Processing {total_pages} page(s) for extraction")
-
-        _update_workflow_progress(
-            group_id=group_id,
-            identifier_name=identifier_name,
-            step_id="base_info_fetching",
+            step_id="base_info_starting",
             step_name="Base Info Extraction",
             status=WorkflowStatus.IN_PROGRESS,
-            message=f"Fetching {total_pages} page image(s) from storage...",
+            message="Starting contract information extraction...",
         )
 
-        # Prepare requests for parallel processing
-        requests = []
-        for page_info in all_pages:
-            # Fetch image from S3
-            image_bytes, media_type = fetch_image_from_s3(page_info["s3_uri"])
+        # Check if we have images to process
+        if not page_images:
+            error_msg = "No page images available for extraction"
+            self.logger.error(f"[{group_id}] {error_msg}")
 
-            requests.append(
-                {
-                    "user_prompt": USER_PROMPT,
-                    "images": [(image_bytes, media_type)],
-                    "system_prompt": SYSTEM_PROMPT if SYSTEM_PROMPT.strip() else None,
-                    "metadata": {
-                        "file_type": page_info["file_type"],
-                        "page_number": page_info["page_number"],
-                        "s3_uri": page_info["s3_uri"],
-                    },
-                }
+            self._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="base_info_failed",
+                step_name="Base Info Extraction",
+                status=WorkflowStatus.FAILED,
+                message=error_msg,
             )
 
-        _update_workflow_progress(
-            group_id=group_id,
-            identifier_name=identifier_name,
-            step_id="base_info_extracting",
-            step_name="Base Info Extraction",
-            status=WorkflowStatus.IN_PROGRESS,
-            message=f"Extracting information from {total_pages} page(s) in parallel...",
-        )
+            return self._create_error_response(
+                step_id="base_info_failed",
+                error_message=error_msg,
+                extracted_base_info=None,
+            )
 
-        # Make parallel LLM calls
-        llm_results = bedrock_client.invoke_parallel(requests)
+        try:
+            # Load the schema
+            schema = BASE_INFO_SCHEMA
 
-        # Process results
-        page_extractions = []
-        successful_pages = 0
+            # Initialize Bedrock client
+            bedrock_client = BedrockClient()
 
-        for result in llm_results:
-            if result["success"]:
-                response_text = bedrock_client.extract_text_response(result["response"])
-                extracted_data = parse_llm_response(response_text)
+            # Collect all page images from all file types
+            all_pages = []
+            for file_type, pages in page_images.items():
+                for page_num, s3_uri in pages.items():
+                    all_pages.append(
+                        {
+                            "file_type": file_type,
+                            "page_number": page_num,
+                            "s3_uri": s3_uri,
+                        }
+                    )
+                    break  # Only process one page per file type for now
 
-                page_extractions.append(
+            total_pages = len(all_pages)
+            self.logger.info(
+                f"[{group_id}] Processing {total_pages} page(s) for extraction"
+            )
+
+            self._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="base_info_fetching",
+                step_name="Base Info Extraction",
+                status=WorkflowStatus.IN_PROGRESS,
+                message=f"Fetching {total_pages} page image(s) from storage...",
+            )
+
+            # Prepare requests for parallel processing
+            requests = []
+            for page_info in all_pages:
+                # Fetch image from S3
+                image_bytes, media_type = fetch_image_from_s3(page_info["s3_uri"])
+
+                requests.append(
                     {
-                        "success": True,
-                        "metadata": result["metadata"],
-                        "extracted_data": extracted_data,
+                        "user_prompt": USER_PROMPT,
+                        "images": [(image_bytes, media_type)],
+                        "system_prompt": SYSTEM_PROMPT if SYSTEM_PROMPT.strip() else None,
+                        "metadata": {
+                            "file_type": page_info["file_type"],
+                            "page_number": page_info["page_number"],
+                            "s3_uri": page_info["s3_uri"],
+                        },
                     }
                 )
-                successful_pages += 1
-            else:
-                page_extractions.append(
-                    {
-                        "success": False,
-                        "metadata": result["metadata"],
-                        "extracted_data": {},
-                        "error": result["error"],
-                    }
-                )
-                logger.warning(
-                    f"[{group_id}] Page extraction failed for page "
-                    f"{result['metadata'].get('page_number')}: {result['error']}"
-                )
 
-        logger.info(
-            f"[{group_id}] Successfully extracted from {successful_pages}/{total_pages} pages"
-        )
+            self._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="base_info_extracting",
+                step_name="Base Info Extraction",
+                status=WorkflowStatus.IN_PROGRESS,
+                message=f"Extracting information from {total_pages} page(s) in parallel...",
+            )
 
-        # Aggregate results
-        _update_workflow_progress(
-            group_id=group_id,
-            identifier_name=identifier_name,
-            step_id="base_info_aggregating",
-            step_name="Base Info Extraction",
-            status=WorkflowStatus.IN_PROGRESS,
-            message="Aggregating extracted information...",
-        )
+            # Make parallel LLM calls
+            llm_results = bedrock_client.invoke_parallel(requests)
 
-        aggregated_info = aggregate_page_extractions(page_extractions, schema)
+            # Process results
+            page_extractions = []
+            successful_pages = 0
 
-        logger.info(f"[{group_id}] Base info extraction completed successfully")
+            for result in llm_results:
+                if result["success"]:
+                    response_text = bedrock_client.extract_text_response(
+                        result["response"]
+                    )
+                    extracted_data = parse_llm_response(response_text)
 
-        _update_workflow_progress(
-            group_id=group_id,
-            identifier_name=identifier_name,
-            step_id="base_info_complete",
-            step_name="Base Info Extraction",
-            status=WorkflowStatus.IN_PROGRESS,
-            message="Contract information extraction completed",
-        )
+                    page_extractions.append(
+                        {
+                            "success": True,
+                            "metadata": result["metadata"],
+                            "extracted_data": extracted_data,
+                        }
+                    )
+                    successful_pages += 1
+                else:
+                    page_extractions.append(
+                        {
+                            "success": False,
+                            "metadata": result["metadata"],
+                            "extracted_data": {},
+                            "error": result["error"],
+                        }
+                    )
+                    self.logger.warning(
+                        f"[{group_id}] Page extraction failed for page "
+                        f"{result['metadata'].get('page_number')}: {result['error']}"
+                    )
 
-        return {
-            "status": WorkflowStatus.IN_PROGRESS,
-            "current_step": "base_info_complete",
-            "error_message": None,
-            "extracted_base_info": aggregated_info,
-        }
+            self.logger.info(
+                f"[{group_id}] Successfully extracted from {successful_pages}/{total_pages} pages"
+            )
 
-    except Exception as e:
-        error_msg = f"Base info extraction failed: {str(e)}"
-        logger.error(f"[{group_id}] {error_msg}")
+            # Aggregate results
+            self._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="base_info_aggregating",
+                step_name="Base Info Extraction",
+                status=WorkflowStatus.IN_PROGRESS,
+                message="Aggregating extracted information...",
+            )
 
-        _update_workflow_progress(
-            group_id=group_id,
-            identifier_name=identifier_name,
-            step_id="base_info_failed",
-            step_name="Base Info Extraction",
-            status=WorkflowStatus.FAILED,
-            message=error_msg,
-        )
+            aggregated_info = aggregate_page_extractions(page_extractions, schema)
 
-        return {
-            "status": WorkflowStatus.FAILED,
-            "current_step": "base_info_failed",
-            "error_message": error_msg,
-            "extracted_base_info": None,
-        }
+            self.logger.info(f"[{group_id}] Base info extraction completed successfully")
+
+            self._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="base_info_complete",
+                step_name="Base Info Extraction",
+                status=WorkflowStatus.IN_PROGRESS,
+                message="Contract information extraction completed",
+            )
+
+            return self._create_success_response(
+                step_id="base_info_complete",
+                extracted_base_info=aggregated_info,
+            )
+
+        except Exception as e:
+            error_msg = f"Base info extraction failed: {str(e)}"
+            self.logger.error(f"[{group_id}] {error_msg}")
+
+            self._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="base_info_failed",
+                step_name="Base Info Extraction",
+                status=WorkflowStatus.FAILED,
+                message=error_msg,
+            )
+
+            return self._create_error_response(
+                step_id="base_info_failed",
+                error_message=error_msg,
+                extracted_base_info=None,
+            )

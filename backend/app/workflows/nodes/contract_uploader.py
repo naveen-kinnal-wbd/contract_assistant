@@ -1,11 +1,14 @@
 """
-S3 Upload node for LangGraph workflow
+S3 Upload node for LangGraph workflow.
+
+This node handles uploading documents to S3 with page extraction
+and optional image conversion.
 """
 
 import base64
 import logging
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any
 
 import boto3
 import fitz  # PyMuPDF
@@ -15,6 +18,7 @@ from botocore.exceptions import ClientError
 from ...config import get_processing_config, get_upload_config
 from ...models.schemas import WorkflowStatus
 from ..state import WorkflowState
+from .base import BaseWorkflowNode
 
 logger = logging.getLogger(__name__)
 
@@ -27,36 +31,9 @@ _boto_config = BotoConfig(
 )
 
 
-def _update_workflow_progress(
-    group_id: str,
-    identifier_name: str,
-    step_id: str,
-    step_name: str,
-    status: WorkflowStatus,
-    message: str,
-) -> None:
-    """
-    Update workflow progress in the ContractService store.
-    Uses late import to avoid circular dependency.
-    """
-    try:
-        from ...services.contract_service import ContractService
-
-        ContractService._update_progress(
-            group_id=group_id,
-            identifier_name=identifier_name,
-            step_id=step_id,
-            step_name=step_name,
-            status=status,
-            message=message,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to update workflow progress: {e}")
-
-
 @lru_cache(maxsize=1)
 def get_s3_client():
-    """Get cached S3 client with configured region and connection pooling"""
+    """Get cached S3 client with configured region and connection pooling."""
     upload_config = get_upload_config()
     region = upload_config.get("region", "us-east-1")
     return boto3.client("s3", region_name=region, config=_boto_config)
@@ -65,7 +42,7 @@ def get_s3_client():
 def build_upload_path(identifier_name: str, file_type: str) -> str:
     """
     Build the S3 upload path for a document.
-    Format: <path_prefix>/<file_type>/<identifier_name>/
+    Format: <path_prefix>/<identifier_name>/<file_type>/
     """
     upload_config = get_upload_config()
     path_prefix = upload_config.get("path_prefix", "uploaded")
@@ -148,7 +125,7 @@ def _sync_upload_document(
     content_type: str,
     metadata: dict[str, str],
 ) -> None:
-    """Synchronous S3 upload (to be run in thread pool)"""
+    """Synchronous S3 upload (to be run in thread pool)."""
     s3_client.put_object(
         Bucket=bucket,
         Key=s3_key,
@@ -158,248 +135,246 @@ def _sync_upload_document(
     )
 
 
-async def _upload_document_pages(
-    s3_client,
-    bucket: str,
-    upload_path: str,
-    doc_content: bytes,
-    doc_filename: str,
-    file_type: str,
-    group_id: str,
-    identifier_name: str,
-    convert_to_image: bool = True,
-    image_format: str = "jpeg",
-    dpi: int = 150,
-) -> tuple[list[str], dict[int, str]]:
+class ContractUploaderNode(BaseWorkflowNode):
     """
-    Extract and upload each page of a document to S3.
-
-    When convert_to_image is True, pages are converted to images (jpeg/png).
-    When convert_to_image is False, pages are extracted as individual PDFs.
-
-    Args:
-        s3_client: Boto3 S3 client
-        bucket: S3 bucket name
-        upload_path: Base S3 path for uploads
-        doc_content: Raw document bytes
-        doc_filename: Original filename
-        file_type: Document file type classification
-        group_id: Group ID for metadata
-        identifier_name: Identifier name for metadata
-        convert_to_image: If True, convert pages to images; if False, keep as PDF
-        image_format: Output image format (when converting to image)
-        dpi: Output image DPI (when converting to image)
-
-    Returns:
-        Tuple of (list of uploaded S3 keys, dict mapping page numbers to S3 URIs)
-    """
-    import asyncio
-
-    # Update progress: extracting pages
-    _update_workflow_progress(
-        group_id=group_id,
-        identifier_name=identifier_name,
-        step_id="extracting_pages",
-        step_name="Document Upload",
-        status=WorkflowStatus.IN_PROGRESS,
-        message=f"Extracting pages from {doc_filename}...",
-    )
-
-    # Extract pages (either as images or as individual PDFs)
-    page_bytes_list, content_type, file_extension = _extract_pdf_pages(
-        doc_content, convert_to_image, image_format, dpi
-    )
-
-    total_pages = len(page_bytes_list)
-    uploaded_keys = []
-    page_uri_mapping: dict[int, str] = {}
-
-    for page_num, page_bytes in enumerate(page_bytes_list, start=1):
-        # Build S3 key: <upload_path>/<base_filename>/<page_number>.<extension>
-        s3_key = f"{upload_path}/{page_num}.{file_extension}"
-
-        # Upload to S3
-        await asyncio.to_thread(
-            _sync_upload_document,
-            s3_client,
-            bucket,
-            s3_key,
-            page_bytes,
-            content_type,
-            {
-                "group_id": group_id,
-                "identifier_name": identifier_name,
-                "file_type": file_type,
-                "original_filename": doc_filename,
-                "page_number": str(page_num),
-            },
-        )
-
-        uploaded_keys.append(s3_key)
-        page_uri_mapping[page_num] = f"s3://{bucket}/{s3_key}"
-
-        logger.info(
-            f"[{group_id}] Successfully uploaded page {page_num} of {doc_filename}"
-        )
-
-    return uploaded_keys, page_uri_mapping
-
-
-async def upload_documents(state: WorkflowState) -> dict[str, Any]:
-    """
-    Upload all documents in the document group to S3 (async).
+    Upload documents to S3 with page extraction.
 
     This node:
     1. Reads the document group from state
-    2. Converts each document page to an image (if convert_to_image is enabled)
-    3. Uploads each page image to S3 bucket at: uploaded/<identifier_name>/<file_type>/<filename>/<page_num>.<ext>
+    2. Converts each document page to an image (if enabled)
+    3. Uploads each page to S3
     4. Returns updated state with uploaded file keys and page image URIs
-
-    Args:
-        state: Current workflow state containing document_group
-
-    Returns:
-        Updated state fields with upload results
     """
-    document_group = state["document_group"]
-    group_id = document_group.group_id
-    identifier_name = document_group.identifier_name
 
-    logger.info(f"[{group_id}] Starting document upload to S3")
+    def __init__(self):
+        super().__init__("ContractUploader")
 
-    # Update progress: starting upload
-    _update_workflow_progress(
-        group_id=group_id,
-        identifier_name=identifier_name,
-        step_id="upload_starting",
-        step_name="Document Upload",
-        status=WorkflowStatus.IN_PROGRESS,
-        message=f"Starting upload for {len(document_group.documents)} document(s)...",
-    )
+    async def _upload_document_pages(
+        self,
+        s3_client,
+        bucket: str,
+        upload_path: str,
+        doc_content: bytes,
+        doc_filename: str,
+        file_type: str,
+        group_id: str,
+        identifier_name: str,
+        convert_to_image: bool = True,
+        image_format: str = "jpeg",
+        dpi: int = 150,
+    ) -> tuple[list[str], dict[int, str]]:
+        """
+        Extract and upload each page of a document to S3.
 
-    upload_config = get_upload_config()
-    processing_config = get_processing_config()
+        Args:
+            s3_client: Boto3 S3 client
+            bucket: S3 bucket name
+            upload_path: Base S3 path for uploads
+            doc_content: Raw document bytes
+            doc_filename: Original filename
+            file_type: Document file type classification
+            group_id: Group ID for metadata
+            identifier_name: Identifier name for metadata
+            convert_to_image: If True, convert pages to images
+            image_format: Output image format
+            dpi: Output image DPI
 
-    bucket = upload_config.get("bucket", "contract-assistant-workflow")
+        Returns:
+            Tuple of (list of uploaded S3 keys, dict mapping page numbers to S3 URIs)
+        """
+        import asyncio
 
-    # Get image conversion settings from config
-    convert_to_image = processing_config.get("convert_to_image", True)
-    image_format = processing_config.get("image_format", "jpeg")
-    image_dpi = processing_config.get("image_dpi", 150)
-
-    uploaded_files = []
-    page_images: dict[str, dict[int, str]] = {}
-
-    try:
-        s3_client = get_s3_client()
-
-        total_docs = len(document_group.documents)
-        for doc_index, doc in enumerate(document_group.documents, start=1):
-            # Update progress for each document
-            _update_workflow_progress(
-                group_id=group_id,
-                identifier_name=identifier_name,
-                step_id=f"processing_doc_{doc_index}",
-                step_name="Document Upload",
-                status=WorkflowStatus.IN_PROGRESS,
-                message=f"Processing document {doc_index}/{total_docs}: {doc.filename}",
-            )
-
-            # Build S3 key: uploaded/<file_type>/<identifier_name>/<filename>
-            upload_path = build_upload_path(identifier_name, doc.file_type.value)
-
-            # Decode base64 content from document
-            encoded_content = getattr(doc, "content", None)
-            doc_content = base64.b64decode(encoded_content) if encoded_content else b""
-
-            if doc_content:
-                # Extract and upload each page (as images or PDFs based on config)
-                keys, page_mapping = await _upload_document_pages(
-                    s3_client=s3_client,
-                    bucket=bucket,
-                    upload_path=upload_path,
-                    doc_content=doc_content,
-                    doc_filename=doc.filename,
-                    file_type=doc.file_type.value,
-                    group_id=group_id,
-                    identifier_name=identifier_name,
-                    convert_to_image=convert_to_image,
-                    image_format=image_format,
-                    dpi=image_dpi,
-                )
-                uploaded_files.extend(keys)
-
-                # Store page URIs under the file type
-                if doc.file_type.value not in page_images:
-                    page_images[doc.file_type.value] = {}
-                page_images[doc.file_type.value].update(page_mapping)
-
-        logger.info(
-            f"[{group_id}] All {len(uploaded_files)} documents uploaded successfully"
-        )
-
-        # Update progress: upload complete
-        _update_workflow_progress(
+        # Update progress: extracting pages
+        self._update_progress(
             group_id=group_id,
             identifier_name=identifier_name,
-            step_id="upload_complete",
+            step_id="extracting_pages",
             step_name="Document Upload",
             status=WorkflowStatus.IN_PROGRESS,
-            message=f"Successfully uploaded {len(uploaded_files)} page(s) to S3",
+            message=f"Extracting pages from {doc_filename}...",
         )
 
-        path_prefix = upload_config.get("path_prefix", "uploaded")
-        return {
-            "status": WorkflowStatus.IN_PROGRESS,
-            "current_step": "upload_complete",
-            "uploaded_files": uploaded_files,
-            "upload_path": f"s3://{bucket}/{path_prefix}",
-            "page_images": page_images if page_images else None,
-            "error_message": None,
-        }
+        # Extract pages (either as images or as individual PDFs)
+        page_bytes_list, content_type, file_extension = _extract_pdf_pages(
+            doc_content, convert_to_image, image_format, dpi
+        )
 
-    except ClientError as e:
-        error_msg = f"S3 upload failed: {str(e)}"
-        logger.error(f"[{group_id}] {error_msg}")
+        uploaded_keys = []
+        page_uri_mapping: dict[int, str] = {}
 
-        # Update progress: upload failed
-        _update_workflow_progress(
+        for page_num, page_bytes in enumerate(page_bytes_list, start=1):
+            # Build S3 key: <upload_path>/<page_number>.<extension>
+            s3_key = f"{upload_path}/{page_num}.{file_extension}"
+
+            # Upload to S3
+            await asyncio.to_thread(
+                _sync_upload_document,
+                s3_client,
+                bucket,
+                s3_key,
+                page_bytes,
+                content_type,
+                {
+                    "group_id": group_id,
+                    "identifier_name": identifier_name,
+                    "file_type": file_type,
+                    "original_filename": doc_filename,
+                    "page_number": str(page_num),
+                },
+            )
+
+            uploaded_keys.append(s3_key)
+            page_uri_mapping[page_num] = f"s3://{bucket}/{s3_key}"
+
+            self.logger.info(
+                f"[{group_id}] Successfully uploaded page {page_num} of {doc_filename}"
+            )
+
+        return uploaded_keys, page_uri_mapping
+
+    async def execute(self, state: WorkflowState) -> dict[str, Any]:
+        """
+        Upload all documents in the document group to S3.
+
+        Args:
+            state: Current workflow state containing document_group
+
+        Returns:
+            Updated state fields with upload results
+        """
+        group_id, identifier_name, document_group = self._get_context(state)
+
+        self.logger.info(f"[{group_id}] Starting document upload to S3")
+
+        # Update progress: starting upload
+        self._update_progress(
             group_id=group_id,
             identifier_name=identifier_name,
-            step_id="upload_failed",
+            step_id="upload_starting",
             step_name="Document Upload",
-            status=WorkflowStatus.FAILED,
-            message=error_msg,
+            status=WorkflowStatus.IN_PROGRESS,
+            message=f"Starting upload for {len(document_group.documents)} document(s)...",
         )
 
-        return {
-            "status": WorkflowStatus.FAILED,
-            "current_step": "upload_failed",
-            "uploaded_files": uploaded_files,
-            "upload_path": None,
-            "page_images": page_images if page_images else None,
-            "error_message": error_msg,
-        }
+        upload_config = get_upload_config()
+        processing_config = get_processing_config()
 
-    except Exception as e:
-        error_msg = f"Upload failed: {str(e)}"
-        logger.error(f"[{group_id}] {error_msg}")
+        bucket = upload_config.get("bucket", "contract-assistant-workflow")
 
-        # Update progress: upload failed
-        _update_workflow_progress(
-            group_id=group_id,
-            identifier_name=identifier_name,
-            step_id="upload_failed",
-            step_name="Document Upload",
-            status=WorkflowStatus.FAILED,
-            message=error_msg,
-        )
+        # Get image conversion settings from config
+        convert_to_image = processing_config.get("convert_to_image", True)
+        image_format = processing_config.get("image_format", "jpeg")
+        image_dpi = processing_config.get("image_dpi", 150)
 
-        return {
-            "status": WorkflowStatus.FAILED,
-            "current_step": "upload_failed",
-            "uploaded_files": uploaded_files,
-            "upload_path": None,
-            "page_images": page_images if page_images else None,
-            "error_message": error_msg,
-        }
+        uploaded_files = []
+        page_images: dict[str, dict[int, str]] = {}
+
+        try:
+            s3_client = get_s3_client()
+
+            total_docs = len(document_group.documents)
+            for doc_index, doc in enumerate(document_group.documents, start=1):
+                # Update progress for each document
+                self._update_progress(
+                    group_id=group_id,
+                    identifier_name=identifier_name,
+                    step_id=f"processing_doc_{doc_index}",
+                    step_name="Document Upload",
+                    status=WorkflowStatus.IN_PROGRESS,
+                    message=f"Processing document {doc_index}/{total_docs}: {doc.filename}",
+                )
+
+                # Build S3 key: uploaded/<identifier_name>/<file_type>/<filename>
+                upload_path = build_upload_path(identifier_name, doc.file_type.value)
+
+                # Decode base64 content from document
+                encoded_content = getattr(doc, "content", None)
+                doc_content = (
+                    base64.b64decode(encoded_content) if encoded_content else b""
+                )
+
+                if doc_content:
+                    # Extract and upload each page
+                    keys, page_mapping = await self._upload_document_pages(
+                        s3_client=s3_client,
+                        bucket=bucket,
+                        upload_path=upload_path,
+                        doc_content=doc_content,
+                        doc_filename=doc.filename,
+                        file_type=doc.file_type.value,
+                        group_id=group_id,
+                        identifier_name=identifier_name,
+                        convert_to_image=convert_to_image,
+                        image_format=image_format,
+                        dpi=image_dpi,
+                    )
+                    uploaded_files.extend(keys)
+
+                    # Store page URIs under the file type
+                    if doc.file_type.value not in page_images:
+                        page_images[doc.file_type.value] = {}
+                    page_images[doc.file_type.value].update(page_mapping)
+
+            self.logger.info(
+                f"[{group_id}] All {len(uploaded_files)} documents uploaded successfully"
+            )
+
+            # Update progress: upload complete
+            self._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="upload_complete",
+                step_name="Document Upload",
+                status=WorkflowStatus.IN_PROGRESS,
+                message=f"Successfully uploaded {len(uploaded_files)} page(s) to S3",
+            )
+
+            path_prefix = upload_config.get("path_prefix", "uploaded")
+            return self._create_success_response(
+                step_id="upload_complete",
+                uploaded_files=uploaded_files,
+                upload_path=f"s3://{bucket}/{path_prefix}",
+                page_images=page_images if page_images else None,
+            )
+
+        except ClientError as e:
+            error_msg = f"S3 upload failed: {str(e)}"
+            self.logger.error(f"[{group_id}] {error_msg}")
+
+            self._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="upload_failed",
+                step_name="Document Upload",
+                status=WorkflowStatus.FAILED,
+                message=error_msg,
+            )
+
+            return self._create_error_response(
+                step_id="upload_failed",
+                error_message=error_msg,
+                uploaded_files=uploaded_files,
+                upload_path=None,
+                page_images=page_images if page_images else None,
+            )
+
+        except Exception as e:
+            error_msg = f"Upload failed: {str(e)}"
+            self.logger.error(f"[{group_id}] {error_msg}")
+
+            self._update_progress(
+                group_id=group_id,
+                identifier_name=identifier_name,
+                step_id="upload_failed",
+                step_name="Document Upload",
+                status=WorkflowStatus.FAILED,
+                message=error_msg,
+            )
+
+            return self._create_error_response(
+                step_id="upload_failed",
+                error_message=error_msg,
+                uploaded_files=uploaded_files,
+                upload_path=None,
+                page_images=page_images if page_images else None,
+            )
