@@ -2,7 +2,7 @@
 LangGraph workflow graphs
 """
 
-from .blueprint_refinement import (
+from workflows.graphs.blueprint_refinement import (
     orchestrate_blueprint_refinement_workflow,
     run_blueprint_refinement_workflow,
     resume_workflow_with_selection,

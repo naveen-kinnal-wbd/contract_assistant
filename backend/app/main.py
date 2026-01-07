@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers.contracts import router as contracts_router
+from routers.contracts import router as contracts_router
 
 # Configure logging
 logging.basicConfig(

@@ -10,9 +10,9 @@ from typing import Any
 
 from langgraph.types import interrupt
 
-from ...models.schemas import WorkflowStatus
-from ..state import WorkflowState
-from .base import BaseWorkflowNode
+from models.schemas import WorkflowStatus
+from workflows.state import WorkflowState
+from workflows.nodes.base import BaseWorkflowNode
 
 logger = logging.getLogger(__name__)
 

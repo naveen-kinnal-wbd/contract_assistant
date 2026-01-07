@@ -18,16 +18,17 @@ Direct class usage (for testing):
 """
 
 # Base class for all workflow nodes
-from .base import BaseWorkflowNode
+from workflows.nodes.base import BaseWorkflowNode
 
 # Node classes
-from .contract_uploader import ContractUploaderNode
-from .base_info_extractor import BaseInfoExtractorNode
-from .asset_selector import AssetSelectorNode
-from .finalize import FinalizeWorkflowNode
+from workflows.nodes.contract_uploader import ContractUploaderNode
+from workflows.nodes.base_info_extractor import BaseInfoExtractorNode
+from workflows.nodes.asset_selector import AssetSelectorNode
+from workflows.nodes.media_rights_extractor import MediaRightsExtractorNode
+from workflows.nodes.finalize import FinalizeWorkflowNode
 
 # Helper functions that may be useful externally
-from .base_info_extractor import (
+from workflows.nodes.base_info_extractor import (
     parse_llm_response,
     aggregate_page_extractions,
     fetch_image_from_s3,
@@ -42,6 +43,7 @@ __all__ = [
     "ContractUploaderNode",
     "BaseInfoExtractorNode",
     "AssetSelectorNode",
+    "MediaRightsExtractorNode",
     "FinalizeWorkflowNode",
     # Helper functions
     "parse_llm_response",

@@ -1,5 +1,5 @@
 """
 API routers for Contract Assistance
 """
-from .contracts import router as contracts_router
+from routers.contracts import router as contracts_router
 

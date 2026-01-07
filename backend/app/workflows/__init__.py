@@ -2,7 +2,7 @@
 LangGraph workflows for contract processing
 """
 
-from .state import WorkflowState
+from workflows.state import WorkflowState
 
 __all__ = ["WorkflowState"]
 

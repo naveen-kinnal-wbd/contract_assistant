@@ -8,9 +8,9 @@ marking the workflow as completed with final details.
 import logging
 from typing import Any
 
-from ...models.schemas import WorkflowStatus
-from ..state import WorkflowState
-from .base import BaseWorkflowNode
+from models.schemas import WorkflowStatus
+from workflows.state import WorkflowState
+from workflows.nodes.base import BaseWorkflowNode
 
 logger = logging.getLogger(__name__)
 

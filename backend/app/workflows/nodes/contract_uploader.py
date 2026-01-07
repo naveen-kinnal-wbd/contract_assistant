@@ -15,10 +15,10 @@ import fitz  # PyMuPDF
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
-from ...config import get_processing_config, get_upload_config
-from ...models.schemas import WorkflowStatus
-from ..state import WorkflowState
-from .base import BaseWorkflowNode
+from config import get_processing_config, get_upload_config
+from models.schemas import WorkflowStatus
+from workflows.state import WorkflowState
+from workflows.nodes.base import BaseWorkflowNode
 
 logger = logging.getLogger(__name__)
 

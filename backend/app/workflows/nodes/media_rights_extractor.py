@@ -1,13 +1,14 @@
 """
-Base info extractor agent node for LangGraph workflow.
+Media rights extractor agent node for LangGraph workflow.
 
-This node extracts basic contract metadata from document images using
+This node extracts media rights information from contract document images using
 AWS Bedrock LLM with parallel processing per page.
 """
 
 import json
 import logging
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -21,108 +22,118 @@ from workflows.nodes.base import BaseWorkflowNode
 
 logger = logging.getLogger(__name__)
 
+
+def load_allowed_values():
+    """Load JSON from file."""
+    # Navigate from current file up to backend/ directory, then to allowed_values.json
+    json_path = Path(__file__).parent.parent.parent.parent / "allowed_values.json"
+    with open(json_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+allowed_values = load_allowed_values()
+
 # ============================================================================
-# PROMPTS - Define system and user prompts for base info extraction
+# PROMPTS - Define system and user prompts for media rights extraction
 # ============================================================================
 
-BASE_INFO_SCHEMA = {
-    "schema": {
-        "contract_type": {
-            "description": "Specifies the type of agreement",
-            "allowed_values": [
-                "Acquisition",
-                "Co-production",
-                "Commission",
-                "Amendment",
-            ],
-            "additional_instructions": [],
-            "output_format": "string",
-        },
-        "contract_name": {
-            "description": "Text describing the contract",
-            "allowed_values": "ANY",
-            "additional_instructions": [
-                "If the contract type is Acquisition: it should be License Agreement - <Program>"
-            ],
-            "output_format": "string",
-        },
-        "date_executed": {
-            "description": "Date when the contract is signed",
-            "allowed_values": "ANY",
-            "additional_instructions": [
-                "Look in: 1) the signature section 2) the header/footer of document 3) at the beginning of the document in the format of 'As of <Date>' in that order",
-                "If you could not find any, leave it blank",
-                "In case of multiple documents, if there is an 'Attachment' document type, extract from Attachment; otherwise extract from Master document",
-            ],
-            "output_format": "string",
-        },
-        "date_effective": {
-            "description": "Date when the contract goes into effect",
-            "allowed_values": "ANY",
-            "additional_instructions": [
-                "Look for phrases like 'Dated as <Date>' or 'as of <Date>'",
-                "In case of multiple documents, if there is an 'Attachment' document type, extract from Attachment; otherwise extract from Master document",
-            ],
-            "output_format": "string",
-        },
-        "parties": {
-            "description": "List of companies and individuals named in the contract; should always include WBD or one of its subsidiaries",
-            "allowed_values": "ANY",
-            "additional_instructions": [
-                "Should have Value of party and Type",
-                "A WBD entity will always be of type 'Primary'; all others will be 'Contracting entity'",
-                "You should have one 'Primary' and one 'Contracting entity'",
-                "Warner Bros. Domestic is not a WBD subsidiary",
-            ],
-            "output_format": "list",
-        },
-        "programs": {
-            "description": "List of titles of a movie, series, or other media asset being acquired or produced for exhibition.",
-            "allowed_values": "ANY",
-            "additional_instructions": [],
-            "output_format": "list",
-        },
-    }
+MEDIA_RIGHTS_SCHEMA = {
+    "Media": {
+        "description": "Ways the program can be exhibited.",
+        "allowed_values": allowed_values["media"],
+        "additional_instructions": [
+            "If you see text like 'video on demand', select the appropriate VOD options from the allowed_values such as 'Authenticated VOD', 'Pay VOD', 'SVOD', and / or 'TVOD' based on the surrounding context. Decide to consider either a single or multiple VOD values by carefully understanding the surrounding context."
+        ],
+        "output_format": "list",
+    },
+    "Outlet": {
+        "description": "Specific networks, brands, platforms, or services granted exhibition rights.",
+        "allowed_values": allowed_values["outlets"],
+        "additional_instructions": [
+            "Look for named entities like HBO Max, Turner Networks, or broader categories like 'all WarnerMedia platforms.' If no specific outlets are limited and broad rights are granted to the Company, indicate 'All Company Outlets' or list specifically mentioned outlets."
+        ],
+        "output_format": "list",
+    },
+    "Term Start": {
+        "description": "First date rights become applicable (MM/DD/YYYY).",
+        "allowed_values": "ANY",
+        "additional_instructions": [
+            "Extract the first day when the granted rights become applicable for THIS SPECIFIC rights package. Look for phrases like 'as of', 'commencement date', 'effective date', or 'beginning on'. Format should be MM/DD/YYYY if specific dates are provided. For production agreements, this may correspond to the date of the agreement unless otherwise specified."
+        ],
+        "output_format": "string",
+    },
+    "Term End": {
+        "description": "End date of rights or 'Perpetuity'.",
+        "allowed_values": "ANY",
+        "additional_instructions": [
+            "Extract the last day when the granted rights remain applicable for THIS SPECIFIC rights package. Look for phrases like 'until', 'expiration date', 'termination date', or language that specifies the duration of rights. For rights granted 'in perpetuity', indicate as 'Perpetuity' to reflect no end date. Format should be MM/DD/YYYY if specific dates are provided."
+        ],
+        "output_format": "string",
+    },
+    "Territories": {
+        "description": "Geographical regions where rights apply.",
+        "allowed_values": allowed_values["territories"],
+        "additional_instructions": [
+            "Extract only the specific geographical locations explicitly mentioned in the text. Do not infer or add broader regions (e.g., do NOT output continents or regions such as “North America,” “Europe,” “Asia”) unless the locations are not explicitly mentioned. Look for specific countries, regions, or terms like 'worldwide', 'global', 'domestic' or 'international'. If rights are granted globally without territorial restrictions, indicate 'Worldwide'."
+        ],
+        "output_format": "list",
+    },
+    "Venues": {
+        "description": "Distribution channels and places where end-users may access the content.",
+        "allowed_values": allowed_values["venues"],
+        "additional_instructions": [
+            "Extract information about where and how end users can access the content. Look for terms like 'affiliate subscribers', 'direct-to-consumer', 'theatrical', 'non-theatrical', 'commercial', 'residential', 'institutional' or similar distribution channels. If comprehensive rights are granted without venue restrictions, indicate 'All Venues'."
+        ],
+        "output_format": "list",
+    },
+    "Languages": {
+        "description": "Languages permitted for exhibition.",
+        "allowed_values": allowed_values["languages"],
+        "additional_instructions": [
+            "Extract the specific languages in which the content may be exhibited, including dubbed or subtitled versions. Look for language restrictions or specifications like 'English-language', 'local language versions', or 'all languages'. If no language restrictions are mentioned with broad rights granted, indicate 'All Languages'."
+        ],
+        "output_format": "list",
+    },
 }
 
-SYSTEM_PROMPT = f"""
+SYSTEM_PROMPT = """
     You are an expert contract analyst and document understanding system.
 
-    Your task is to extract metadata from a SINGLE PAGE of a media contract.
-    The page is provided as an image. 
-    Take the provided JSON Schema <INPUT_SCHEMA> as a reference to understand the fields, its description, its output format, and its allowed values.
+        Your task is to extract metadata from a SINGLE PAGE of a media contract.
+        The page is provided as an image. 
+        Take the provided JSON Schema <INPUT_SCHEMA> as a reference to understand the fields, its description, its output format, and its allowed values.
 
-    <INPUT_SCHEMA>
-    {BASE_INFO_SCHEMA}
-    </INPUT_SCHEMA>
+        <INPUT_SCHEMA>
+        {MEDIA_RIGHTS_SCHEMA}
+        </INPUT_SCHEMA>
 
-    CRITICAL RULES:
-    - When extracting metadata, you must follow the list of additional_instructions for each JSON field that is specified in the <INPUT_SCHEMA> schema, if it exists. The list of additional_instructions describe how to interpret contract language, how to resolve ambiguity, and how to choose values. Always treat the all of the rules mentioned in the additional_instructions list as authoritative rules.
-    - If the list of allowed_values are explicitly specified in the <INPUT_SCHEMA> schema, you must match the extracted value to the allowed_values.
-    - If the allowed_values are specified as "ANY", you can extract any value that is relevant to the field.
-    - You must strictly follow the output_format defined in the <INPUT_SCHEMA> schema and the below 9 critical rules.
-        1. If output_format = "string" → return a JSON string value (not a list).
-        2. If output_format = "list" → always return a JSON array.
-        3. If multiple values appear for a list field, return all values as a list.
-        4. If one value appears for a list field, return a single-item list.
-        5. If no values appear for a list field, return an empty list ([]).
-        6. Never return a string where a list is required.
-        7. Never return a list where a string is required.
-        8. Do not add fields that are not in the blueprint.
-        9. Do not change field names. 
-    - Only extract information that is explicitly visible on this page. 
-    - Do NOT infer or guess values from other pages.
-    - All bounding boxes MUST correspond exactly to the visible source text.
-    - Bounding boxes must be in image pixel coordinates: [x1, y1, x2, y2].
-    - Return structured JSON only. No explanations or commentary.
-    - All fields must be present, even if there are no values found on this page, with a confidence score of 0.0.
+        CRITICAL RULES:
+        - When extracting metadata, you must follow the list of additional_instructions for each JSON field that is specified in the <INPUT_SCHEMA> schema, if it exists. The list of additional_instructions describe how to interpret contract language, how to resolve ambiguity, and how to choose values. Always treat the all of the rules mentioned in the additional_instructions list as authoritative rules.
+        - If the list of allowed_values are explicitly specified in the <INPUT_SCHEMA> schema, you must match the extracted value to the allowed_values.
+        - If the allowed_values are specified as "ANY", you can extract any value that is relevant to the field.
+        - You must strictly follow the output_format defined in the <INPUT_SCHEMA> schema and the below 9 critical rules.
+            1. If output_format = "string" → return a JSON string value (not a list).
+            2. If output_format = "list" → always return a JSON array.
+            3. If multiple values appear for a list field, return all values as a list.
+            4. If one value appears for a list field, return a single-item list.
+            5. If no values appear for a list field, return an empty list ([]).
+            6. Never return a string where a list is required.
+            7. Never return a list where a string is required.
+            8. Do not add fields that are not in the blueprint.
+            9. Do not change field names. 
+        - Only extract information that is explicitly visible on this page. 
+        - Do NOT infer or guess values from other pages.
+        - All bounding boxes MUST correspond exactly to the visible source text.
+        - Bounding boxes must be in image pixel coordinates: [x1, y1, x2, y2].
+        - Return structured JSON only. No explanations or commentary.
+        - All fields must be present, even if there are no values found on this page, with a confidence score of 0.0.
 """
 
-USER_PROMPT = f"""
+USER_PROMPT = """
     Analyze the following image, which represents ONE page of a media contract.
 
     <INPUT_SCHEMA>
-    {BASE_INFO_SCHEMA}
+    {MEDIA_RIGHTS_SCHEMA}
     </INPUT_SCHEMA>
 
     Return all detected metadata fields as per the above <INPUT_SCHEMA> found on this page, using the below output format for each field:
@@ -226,7 +237,7 @@ def aggregate_page_extractions(
 
     Args:
         page_results: List of extraction results from each page
-        schema: The base info schema defining expected fields
+        schema: The media rights schema defining expected fields
 
     Returns:
         Aggregated metadata dictionary with full extraction info
@@ -321,43 +332,43 @@ def parse_llm_response(response_text: str) -> dict[str, Any]:
 # ============================================================================
 
 
-class BaseInfoExtractorNode(BaseWorkflowNode):
+class MediaRightsExtractorNode(BaseWorkflowNode):
     """
-    Extract basic contract information from document images using LLM.
+    Extract media rights information from contract document images using LLM.
 
     This agent:
     1. Fetches images from S3 using page_images from state
-    2. Uses the BASE_INFO_SCHEMA for extraction
+    2. Uses the MEDIA_RIGHTS_SCHEMA for extraction
     3. Makes parallel LLM calls (one per page image)
     4. Aggregates results and picks highest-confidence values
     """
 
     def __init__(self):
-        super().__init__("BaseInfoExtractor")
+        super().__init__("MediaRightsExtractor")
 
     async def execute(self, state: WorkflowState) -> dict[str, Any]:
         """
-        Extract basic contract information from document images.
+        Extract media rights information from contract document images.
 
         Args:
             state: Current workflow state containing page_images
 
         Returns:
-            Updated state fields with extracted_base_info
+            Updated state fields with extracted_media_rights
         """
         group_id, identifier_name, document_group = self._get_context(state)
         page_images = state.get("page_images")
 
-        self.logger.info(f"[{group_id}] Starting base info extraction")
+        self.logger.info(f"[{group_id}] Starting media rights extraction")
 
         # Update progress
         self._update_progress(
             group_id=group_id,
             identifier_name=identifier_name,
-            step_id="base_info_starting",
-            step_name="Base Info Extraction",
+            step_id="media_rights_starting",
+            step_name="Media Rights Extraction",
             status=WorkflowStatus.IN_PROGRESS,
-            message="Starting contract information extraction...",
+            message="Starting media rights extraction...",
         )
 
         # Check if we have images to process
@@ -368,21 +379,21 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
             self._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
-                step_id="base_info_failed",
-                step_name="Base Info Extraction",
+                step_id="media_rights_failed",
+                step_name="Media Rights Extraction",
                 status=WorkflowStatus.FAILED,
                 message=error_msg,
             )
 
             return self._create_error_response(
-                step_id="base_info_failed",
+                step_id="media_rights_failed",
                 error_message=error_msg,
-                extracted_base_info=None,
+                extracted_media_rights=None,
             )
 
         try:
             # Load the schema
-            schema = BASE_INFO_SCHEMA
+            schema = MEDIA_RIGHTS_SCHEMA
 
             # Initialize Bedrock client
             bedrock_client = BedrockClient()
@@ -398,18 +409,17 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
                             "s3_uri": s3_uri,
                         }
                     )
-                    break  # Only process one page per file type for now
 
             total_pages = len(all_pages)
             self.logger.info(
-                f"[{group_id}] Processing {total_pages} page(s) for extraction"
+                f"[{group_id}] Processing {total_pages} page(s) for media rights extraction"
             )
 
             self._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
-                step_id="base_info_fetching",
-                step_name="Base Info Extraction",
+                step_id="media_rights_fetching",
+                step_name="Media Rights Extraction",
                 status=WorkflowStatus.IN_PROGRESS,
                 message=f"Fetching {total_pages} page image(s) from storage...",
             )
@@ -424,7 +434,9 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
                     {
                         "user_prompt": USER_PROMPT,
                         "images": [(image_bytes, media_type)],
-                        "system_prompt": SYSTEM_PROMPT if SYSTEM_PROMPT.strip() else None,
+                        "system_prompt": (
+                            SYSTEM_PROMPT if SYSTEM_PROMPT.strip() else None
+                        ),
                         "metadata": {
                             "file_type": page_info["file_type"],
                             "page_number": page_info["page_number"],
@@ -436,10 +448,10 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
             self._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
-                step_id="base_info_extracting",
-                step_name="Base Info Extraction",
+                step_id="media_rights_extracting",
+                step_name="Media Rights Extraction",
                 status=WorkflowStatus.IN_PROGRESS,
-                message=f"Extracting information from {total_pages} page(s) in parallel...",
+                message=f"Extracting media rights from {total_pages} page(s) in parallel...",
             )
 
             # Make parallel LLM calls
@@ -479,52 +491,54 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
                     )
 
             self.logger.info(
-                f"[{group_id}] Successfully extracted from {successful_pages}/{total_pages} pages"
+                f"[{group_id}] Successfully extracted media rights from {successful_pages}/{total_pages} pages"
             )
 
             # Aggregate results
             self._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
-                step_id="base_info_aggregating",
-                step_name="Base Info Extraction",
+                step_id="media_rights_aggregating",
+                step_name="Media Rights Extraction",
                 status=WorkflowStatus.IN_PROGRESS,
-                message="Aggregating extracted information...",
+                message="Aggregating extracted media rights information...",
             )
 
             aggregated_info = aggregate_page_extractions(page_extractions, schema)
 
-            self.logger.info(f"[{group_id}] Base info extraction completed successfully")
+            self.logger.info(
+                f"[{group_id}] Media rights extraction completed successfully"
+            )
 
             self._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
-                step_id="base_info_complete",
-                step_name="Base Info Extraction",
+                step_id="media_rights_complete",
+                step_name="Media Rights Extraction",
                 status=WorkflowStatus.IN_PROGRESS,
-                message="Contract information extraction completed",
+                message="Media rights extraction completed",
             )
 
             return self._create_success_response(
-                step_id="base_info_complete",
-                extracted_base_info=aggregated_info,
+                step_id="media_rights_complete",
+                extracted_media_rights=aggregated_info,
             )
 
         except Exception as e:
-            error_msg = f"Base info extraction failed: {str(e)}"
+            error_msg = f"Media rights extraction failed: {str(e)}"
             self.logger.error(f"[{group_id}] {error_msg}")
 
             self._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
-                step_id="base_info_failed",
-                step_name="Base Info Extraction",
+                step_id="media_rights_failed",
+                step_name="Media Rights Extraction",
                 status=WorkflowStatus.FAILED,
                 message=error_msg,
             )
 
             return self._create_error_response(
-                step_id="base_info_failed",
+                step_id="media_rights_failed",
                 error_message=error_msg,
-                extracted_base_info=None,
+                extracted_media_rights=None,
             )

@@ -15,7 +15,7 @@ from typing import Any, Optional
 import boto3
 from botocore.config import Config as BotoConfig
 
-from ..config import get_llm_config
+from config import get_llm_config
 
 logger = logging.getLogger(__name__)
 

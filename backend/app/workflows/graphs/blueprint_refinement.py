@@ -12,12 +12,13 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-from ...models.schemas import DocumentGroup, WorkflowStatus
-from ..state import WorkflowState
-from ..nodes.contract_uploader import ContractUploaderNode
-from ..nodes.base_info_extractor import BaseInfoExtractorNode
-from ..nodes.asset_selector import AssetSelectorNode
-from ..nodes.finalize import FinalizeWorkflowNode
+from models.schemas import DocumentGroup, WorkflowStatus
+from workflows.state import WorkflowState
+from workflows.nodes.contract_uploader import ContractUploaderNode
+from workflows.nodes.base_info_extractor import BaseInfoExtractorNode
+from workflows.nodes.asset_selector import AssetSelectorNode
+from workflows.nodes.media_rights_extractor import MediaRightsExtractorNode
+from workflows.nodes.finalize import FinalizeWorkflowNode
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ def get_workflow() -> Any:
         workflow.add_node("upload_documents", ContractUploaderNode())
         workflow.add_node("base_info_extractor_agent", BaseInfoExtractorNode())
         workflow.add_node("asset_selector", AssetSelectorNode())
+        # workflow.add_node("media_rights_extractor", MediaRightsExtractorNode())
         workflow.add_node("finalize", FinalizeWorkflowNode())
 
         # Set entry point
@@ -53,6 +55,8 @@ def get_workflow() -> Any:
         # Connect edges
         workflow.add_edge("upload_documents", "base_info_extractor_agent")
         workflow.add_edge("base_info_extractor_agent", "asset_selector")
+        # workflow.add_edge("asset_selector", "media_rights_extractor")
+        # workflow.add_edge("media_rights_extractor", "finalize")
         workflow.add_edge("asset_selector", "finalize")
         workflow.add_edge("finalize", END)
 
@@ -90,6 +94,7 @@ def orchestrate_blueprint_refinement_workflow(
     workflow.add_node("upload_documents", ContractUploaderNode())
     workflow.add_node("base_info_extractor_agent", BaseInfoExtractorNode())
     workflow.add_node("asset_selector", AssetSelectorNode())
+    workflow.add_node("media_rights_extractor", MediaRightsExtractorNode())
     workflow.add_node("finalize", FinalizeWorkflowNode())
 
     # Set the entry point
@@ -101,8 +106,11 @@ def orchestrate_blueprint_refinement_workflow(
     # Connect base info extraction to program selector
     workflow.add_edge("base_info_extractor_agent", "asset_selector")
 
-    # Connect program selector to finalize
-    workflow.add_edge("asset_selector", "finalize")
+    # Connect program selector to media rights extractor
+    workflow.add_edge("asset_selector", "media_rights_extractor")
+
+    # Connect media rights extractor to finalize
+    workflow.add_edge("media_rights_extractor", "finalize")
 
     # Add any additional nodes after finalize
     if additional_nodes:
@@ -155,6 +163,7 @@ async def run_blueprint_refinement_workflow(
         "program_selection_options": None,
         "awaiting_program_selection": False,
         "selected_program": None,
+        "extracted_media_rights": None,
     }
 
     # Get the workflow with checkpointer

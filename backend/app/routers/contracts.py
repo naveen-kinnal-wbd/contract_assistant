@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from typing import Optional
 import json
 
-from ..models.schemas import (
+from models.schemas import (
     AssetSelectionRequest,
     DocumentGroup,
     ProgramSelectionRequest,
@@ -17,7 +17,7 @@ from ..models.schemas import (
     ProcessingResponse,
     WorkflowStatus,
 )
-from ..services.contract_service import ContractService
+from services.contract_service import ContractService
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,5 @@
 """
 Business logic services for Contract Assistance
 """
-from .contract_service import ContractService
+from services.contract_service import ContractService
 

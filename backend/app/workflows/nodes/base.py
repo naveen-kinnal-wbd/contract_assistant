@@ -12,8 +12,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ...models.schemas import WorkflowStatus
-from ..state import WorkflowState
+from models.schemas import WorkflowStatus
+from workflows.state import WorkflowState
 
 
 class BaseWorkflowNode(ABC):
@@ -110,7 +110,7 @@ class BaseWorkflowNode(ABC):
             selection_data: Optional selection options for user feedback
         """
         try:
-            from ...services.contract_service import ContractService
+            from services.contract_service import ContractService
 
             ContractService._update_progress(
                 group_id=group_id,

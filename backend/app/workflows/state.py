@@ -4,7 +4,7 @@ Workflow state definitions for LangGraph workflows
 
 from typing import Any, Optional, TypedDict
 
-from ..models.schemas import DocumentGroup, WorkflowStatus
+from models.schemas import DocumentGroup, WorkflowStatus
 
 
 class WorkflowState(TypedDict):
@@ -40,3 +40,6 @@ class WorkflowState(TypedDict):
 
     # Selected program after user makes a choice
     selected_program: Optional[dict[str, Any]]
+
+    # Extracted media rights from contract documents
+    extracted_media_rights: Optional[dict[str, Any]]

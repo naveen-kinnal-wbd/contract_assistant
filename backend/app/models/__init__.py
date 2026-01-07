@@ -1,7 +1,7 @@
 """
 Data models and schemas for Contract Assistance
 """
-from .schemas import (
+from models.schemas import (
     DocumentType,
     FileType,
     WorkflowStatus,
