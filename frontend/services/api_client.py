@@ -161,3 +161,20 @@ class ContractAPIClient:
             )
             response.raise_for_status()
             return response.json()
+
+    def select_program(self, group_id: str, selection: dict) -> dict:
+        """
+        Submit program selection to continue the workflow
+
+        Args:
+            group_id: The workflow group ID
+            selection: Dict with keys program_name, contract_type, contract_name,
+                      parties, date_effective, date_executed
+        """
+        with self._get_client() as client:
+            response = client.post(
+                "/api/contracts/select-program",
+                json={"group_id": group_id, **selection},
+            )
+            response.raise_for_status()
+            return response.json()

@@ -11,6 +11,7 @@ from ...models.schemas import DocumentGroup, WorkflowStatus
 from ..state import WorkflowState
 from ..nodes.upload_node import upload_documents
 from ..nodes.base_info_extractor_node import base_info_extractor_agent
+from ..nodes.program_selector_node import program_selector_node
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,12 @@ def orchestrate_blueprint_refinement_workflow(
     The workflow includes:
     1. upload_documents - Upload files to S3
     2. base_info_extractor_agent - Extract basic contract metadata using LLM
+    3. program_selector_node - Transform extracted info and await user program selection
 
     Additional nodes can be added via the additional_nodes parameter.
 
     Args:
-        additional_nodes: List of (node_name, node_function) tuples to add after extraction
+        additional_nodes: List of (node_name, node_function) tuples to add after program selection
 
     Returns:
         Compiled StateGraph workflow
@@ -39,6 +41,7 @@ def orchestrate_blueprint_refinement_workflow(
     # Add the core nodes
     workflow.add_node("upload_documents", upload_documents)
     workflow.add_node("base_info_extractor_agent", base_info_extractor_agent)
+    workflow.add_node("program_selector_node", program_selector_node)
 
     # Set the entry point
     workflow.set_entry_point("upload_documents")
@@ -46,9 +49,12 @@ def orchestrate_blueprint_refinement_workflow(
     # Connect upload to base info extraction
     workflow.add_edge("upload_documents", "base_info_extractor_agent")
 
-    # Add any additional nodes after base_info_extractor_agent
+    # Connect base info extraction to program selector
+    workflow.add_edge("base_info_extractor_agent", "program_selector_node")
+
+    # Add any additional nodes after program_selector_node
     if additional_nodes:
-        prev_node = "base_info_extractor_agent"
+        prev_node = "program_selector_node"
         for node_name, node_func in additional_nodes:
             workflow.add_node(node_name, node_func)
             workflow.add_edge(prev_node, node_name)
@@ -56,8 +62,8 @@ def orchestrate_blueprint_refinement_workflow(
         # Connect last node to END
         workflow.add_edge(prev_node, END)
     else:
-        # If no additional nodes, connect extraction directly to END
-        workflow.add_edge("base_info_extractor_agent", END)
+        # If no additional nodes, connect program selector directly to END
+        workflow.add_edge("program_selector_node", END)
 
     return workflow.compile()
 
@@ -87,6 +93,8 @@ async def run_blueprint_refinement_workflow(
         "upload_path": None,
         "page_images": None,
         "extracted_base_info": None,
+        "program_selection_options": None,
+        "selected_program": None,
     }
 
     # Create and run the workflow

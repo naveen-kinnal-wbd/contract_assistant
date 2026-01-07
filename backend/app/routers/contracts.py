@@ -12,6 +12,7 @@ import json
 from ..models.schemas import (
     AssetSelectionRequest,
     DocumentGroup,
+    ProgramSelectionRequest,
     WorkflowProgress,
     ProcessingResponse,
     WorkflowStatus,
@@ -114,6 +115,24 @@ async def select_asset(request: AssetSelectionRequest):
     logger.info(f"Received asset selection for group: {request.group_id}")
 
     response = await ContractService.continue_after_asset_selection(request)
+
+    return response
+
+
+@router.post("/select-program", response_model=ProcessingResponse)
+async def select_program(request: ProgramSelectionRequest):
+    """
+    Submit program selection to continue the workflow.
+
+    This endpoint is called when a user selects a program from the
+    program selection table displayed after base info extraction.
+    """
+    logger.info(
+        f"Received program selection for group: {request.group_id}, "
+        f"program: {request.program_name}"
+    )
+
+    response = await ContractService.continue_after_program_selection(request)
 
     return response
 

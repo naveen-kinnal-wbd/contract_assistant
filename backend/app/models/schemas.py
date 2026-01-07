@@ -3,7 +3,7 @@ Pydantic schemas for Contract Assistance API
 """
 
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -95,3 +95,26 @@ class AssetSelectionRequest(BaseModel):
     asset_id: str
     deal_name: str
     asset_name: str
+
+
+class ProgramSelectionOption(BaseModel):
+    """A single program option for user selection"""
+
+    program_name: str
+    contract_type: Optional[str] = None
+    contract_name: Optional[str] = None
+    parties: Optional[list[Any]] = None  # Can be list of strings or dicts
+    date_effective: Optional[str] = None
+    date_executed: Optional[str] = None
+
+
+class ProgramSelectionRequest(BaseModel):
+    """Request model for program selection"""
+
+    group_id: str
+    program_name: str
+    contract_type: Optional[str] = None
+    contract_name: Optional[str] = None
+    parties: Optional[list[Any]] = None  # Can be list of strings or dicts
+    date_effective: Optional[str] = None
+    date_executed: Optional[str] = None

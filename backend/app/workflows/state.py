@@ -30,3 +30,9 @@ class WorkflowState(TypedDict):
 
     # Extracted base info from contract documents
     extracted_base_info: Optional[dict[str, Any]]
+
+    # Program selection options (transformed from extracted_base_info for UI display)
+    program_selection_options: Optional[list[dict[str, Any]]]
+
+    # Selected program after user makes a choice
+    selected_program: Optional[dict[str, Any]]

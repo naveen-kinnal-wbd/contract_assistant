@@ -103,6 +103,91 @@ def render_asset_selection_table(group_id: str, selection_data: list[dict], api_
                 st.error(f"Failed to submit selection: {str(e)}")
 
 
+def render_program_selection_table(group_id: str, selection_data: list[dict], api_client):
+    """Render the program selection table with Select buttons"""
+    if not selection_data:
+        return
+
+    st.markdown(
+        "**The following programs have been extracted from the contract. "
+        "Please select a program to continue:**"
+    )
+
+    # Create a table-like display using columns
+    # Header row - adjust column widths for readability
+    cols = st.columns([2, 1.5, 2, 2, 1.5, 1.5, 1])
+    cols[0].markdown("**Program**")
+    cols[1].markdown("**Type**")
+    cols[2].markdown("**Contract Name**")
+    cols[3].markdown("**Parties**")
+    cols[4].markdown("**Effective**")
+    cols[5].markdown("**Executed**")
+    cols[6].markdown("**Action**")
+
+    st.markdown("---")
+
+    # Data rows
+    for idx, item in enumerate(selection_data):
+        cols = st.columns([2, 1.5, 2, 2, 1.5, 1.5, 1])
+
+        # Program name
+        program_name = item.get("program_name", "N/A")
+        cols[0].write(program_name)
+
+        # Contract type
+        contract_type = item.get("contract_type", "")
+        cols[1].write(contract_type or "-")
+
+        # Contract name (truncate if too long)
+        contract_name = item.get("contract_name", "")
+        if contract_name and len(contract_name) > 30:
+            contract_name = contract_name[:27] + "..."
+        cols[2].write(contract_name or "-")
+
+        # Parties (format as comma-separated list)
+        parties = item.get("parties", [])
+        if parties:
+            party_names = []
+            for p in parties:
+                if isinstance(p, dict):
+                    party_names.append(p.get("value", str(p)))
+                else:
+                    party_names.append(str(p))
+            parties_str = ", ".join(party_names)
+            if len(parties_str) > 30:
+                parties_str = parties_str[:27] + "..."
+        else:
+            parties_str = "-"
+        cols[3].write(parties_str)
+
+        # Date effective
+        date_effective = item.get("date_effective", "")
+        cols[4].write(date_effective or "-")
+
+        # Date executed
+        date_executed = item.get("date_executed", "")
+        cols[5].write(date_executed or "-")
+
+        # Select button
+        if cols[6].button("Select", key=f"select_program_{group_id}_{idx}"):
+            try:
+                api_client.select_program(group_id=group_id, selection=item)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to submit selection: {str(e)}")
+
+
+def is_program_selection(selection_data: list[dict]) -> bool:
+    """
+    Determine if the selection_data is for program selection or asset selection.
+    Program selection data has 'program_name' key.
+    """
+    if not selection_data:
+        return False
+    first_item = selection_data[0]
+    return "program_name" in first_item
+
+
 def render_workflow_steps(
     steps: list[dict], current_step_index: int, group_id: str = None, api_client=None
 ):
@@ -140,7 +225,7 @@ def render_workflow_steps(
             if timestamp:
                 st.caption(timestamp)
 
-        # Show asset selection table if this step requires feedback
+        # Show selection table if this step requires feedback
         if (
             status == WorkflowStatus.AWAITING_FEEDBACK.value
             and selection_data
@@ -148,7 +233,11 @@ def render_workflow_steps(
             and api_client
         ):
             st.markdown("")
-            render_asset_selection_table(group_id, selection_data, api_client)
+            # Determine which type of selection table to render
+            if is_program_selection(selection_data):
+                render_program_selection_table(group_id, selection_data, api_client)
+            else:
+                render_asset_selection_table(group_id, selection_data, api_client)
 
 
 def render_document_tile(
