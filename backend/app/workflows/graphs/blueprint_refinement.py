@@ -6,7 +6,7 @@ LangGraph's native interrupt mechanism.
 """
 
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -32,100 +32,59 @@ _compiled_workflow = None
 
 def get_workflow() -> Any:
     """
-    Get or create the compiled workflow with checkpointer.
+    Get or create the compiled blueprint refinement workflow graph.
 
     The workflow is compiled once and cached for reuse.
     The checkpointer enables interrupt/resume functionality.
+
+    The workflow includes:
+    1. upload_documents - Upload files to S3
+    2. base_info_extractor_agent - Extract basic contract metadata using LLM
+    3. asset_selector - Transform extracted info and await user program selection
+    4. media_rights_extractor - Extract media rights information
+    5. finalize - Complete the workflow after selection
+
+    Returns:
+        Compiled StateGraph workflow with checkpointer for interrupt support
     """
     global _compiled_workflow
 
     if _compiled_workflow is None:
+        # Create the graph with our state schema
         workflow = StateGraph(WorkflowState)
 
-        # Add nodes - instantiate classes here (callable via __call__)
+        # Add the core nodes - instantiate classes here (callable via __call__)
         workflow.add_node("upload_documents", ContractUploaderNode())
         workflow.add_node("base_info_extractor_agent", BaseInfoExtractorNode())
         workflow.add_node("asset_selector", AssetSelectorNode())
-        # workflow.add_node("media_rights_extractor", MediaRightsExtractorNode())
+        workflow.add_node("media_rights_extractor", MediaRightsExtractorNode())
         workflow.add_node("finalize", FinalizeWorkflowNode())
 
-        # Set entry point
+        # Set the entry point
         workflow.set_entry_point("upload_documents")
 
-        # Connect edges
+        # Connect upload to base info extraction
         workflow.add_edge("upload_documents", "base_info_extractor_agent")
+
+        # Connect base info extraction to program selector
         workflow.add_edge("base_info_extractor_agent", "asset_selector")
-        # workflow.add_edge("asset_selector", "media_rights_extractor")
-        # workflow.add_edge("media_rights_extractor", "finalize")
-        workflow.add_edge("asset_selector", "finalize")
+
+        # Connect program selector to media rights extractor
+        workflow.add_edge("asset_selector", "media_rights_extractor")
+
+        # Connect media rights extractor to finalize
+        workflow.add_edge("media_rights_extractor", "finalize")
+
+        # Connect asset selector to finalize
+        # workflow.add_edge("asset_selector", "finalize")
+
+        # Connect finalize to END
         workflow.add_edge("finalize", END)
 
         # Compile with checkpointer for interrupt support
         _compiled_workflow = workflow.compile(checkpointer=_checkpointer)
 
     return _compiled_workflow
-
-
-def orchestrate_blueprint_refinement_workflow(
-    additional_nodes: list[tuple[str, Callable]] = None,
-) -> Any:
-    """
-    Create the blueprint refinement workflow graph.
-
-    DEPRECATED: Use get_workflow() instead for interrupt support.
-    This function is kept for backwards compatibility.
-
-    The workflow includes:
-    1. upload_documents - Upload files to S3
-    2. base_info_extractor_agent - Extract basic contract metadata using LLM
-    3. asset_selector - Transform extracted info and await user program selection
-    4. finalize - Complete the workflow after selection
-
-    Args:
-        additional_nodes: List of (node_name, node_function) tuples to add after finalize
-
-    Returns:
-        Compiled StateGraph workflow
-    """
-    # Create the graph with our state schema
-    workflow = StateGraph(WorkflowState)
-
-    # Add the core nodes - instantiate classes here (callable via __call__)
-    workflow.add_node("upload_documents", ContractUploaderNode())
-    workflow.add_node("base_info_extractor_agent", BaseInfoExtractorNode())
-    workflow.add_node("asset_selector", AssetSelectorNode())
-    workflow.add_node("media_rights_extractor", MediaRightsExtractorNode())
-    workflow.add_node("finalize", FinalizeWorkflowNode())
-
-    # Set the entry point
-    workflow.set_entry_point("upload_documents")
-
-    # Connect upload to base info extraction
-    workflow.add_edge("upload_documents", "base_info_extractor_agent")
-
-    # Connect base info extraction to program selector
-    workflow.add_edge("base_info_extractor_agent", "asset_selector")
-
-    # Connect program selector to media rights extractor
-    workflow.add_edge("asset_selector", "media_rights_extractor")
-
-    # Connect media rights extractor to finalize
-    workflow.add_edge("media_rights_extractor", "finalize")
-
-    # Add any additional nodes after finalize
-    if additional_nodes:
-        prev_node = "finalize"
-        for node_name, node_func in additional_nodes:
-            workflow.add_node(node_name, node_func)
-            workflow.add_edge(prev_node, node_name)
-            prev_node = node_name
-        # Connect last node to END
-        workflow.add_edge(prev_node, END)
-    else:
-        # If no additional nodes, connect finalize directly to END
-        workflow.add_edge("finalize", END)
-
-    return workflow.compile(checkpointer=_checkpointer)
 
 
 async def run_blueprint_refinement_workflow(

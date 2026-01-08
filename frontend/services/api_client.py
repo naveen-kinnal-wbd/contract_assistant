@@ -80,7 +80,8 @@ class ContractAPIClient:
 
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = base_url or os.getenv("API_BASE_URL", "http://localhost:8000")
-        self.timeout = httpx.Timeout(10.0, connect=5.0)
+        # Longer timeout for document processing (60s total, 10s connect)
+        self.timeout = httpx.Timeout(60.0, connect=10.0)
 
     def _get_client(self) -> httpx.Client:
         """Create a new HTTP client"""
