@@ -133,14 +133,24 @@ USER_PROMPT = f"""
             "<field_name>": {{
                 "value": "<exact extracted text>",
                 "bbox": [x1, y1, x2, y2],
-                "confidence": <float between 0.0 and 1.0>
-                "page_number": <integer>
+                "confidence": <float between 0.0 and 1.0>,
+                "page_number": <integer>,
+                "original_text": "<source text chunk that was used to extract the value>"
             }},
             ...
         }}
     }}
-
-    If no metadata fields are found on this page, return an empty object for the "extractions" key.
+    
+    CRITICAL RULES:
+     - If no metadata fields are found on this page, return an empty dictionary for the "extractions", and set "page_has_contract_content" to False.
+     - If metadata fields are found on this page, set "page_has_contract_content" to True.
+     - The "original_text" key should be the exact text chunk that was used to extract the value.
+     - The "bbox" key should be the bounding box co-ordinates of the original_text that was used to extract the value.
+     - The "confidence" key should be a float between 0.0 and 1.0 that represents the confidence in the extracted value.
+     - The "page_number" key should be the page number of the page that the text chunk was found on. Please use the page_number in the 'metadata' to get the page number.
+     - The "value" key should be the exact extracted text.
+     - The "field_name" key should be the name of the field that was extracted.
+     - The "extractions" key should be a dictionary of the extracted values.
 """
 
 # ============================================================================
