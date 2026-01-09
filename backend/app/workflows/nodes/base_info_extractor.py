@@ -86,41 +86,15 @@ BASE_INFO_SCHEMA = {
     }
 }
 
-SYSTEM_PROMPT = f"""
-    You are an expert contract analyst and document understanding system.
-
-    Your task is to extract metadata from a SINGLE PAGE of a media contract.
-    The page is provided as an image. 
-    Take the provided JSON Schema <INPUT_SCHEMA> as a reference to understand the fields, its description, its output format, and its allowed values.
-
-    <INPUT_SCHEMA>
-    {BASE_INFO_SCHEMA}
-    </INPUT_SCHEMA>
-
-    CRITICAL RULES:
-    - When extracting metadata, you must follow the list of additional_instructions for each JSON field that is specified in the <INPUT_SCHEMA> schema, if it exists. The list of additional_instructions describe how to interpret contract language, how to resolve ambiguity, and how to choose values. Always treat the all of the rules mentioned in the additional_instructions list as authoritative rules.
-    - If the list of allowed_values are explicitly specified in the <INPUT_SCHEMA> schema, you must match the extracted value to the allowed_values.
-    - If the allowed_values are specified as "ANY", you can extract any value that is relevant to the field.
-    - You must strictly follow the output_format defined in the <INPUT_SCHEMA> schema and the below 9 critical rules.
-        1. If output_format = "string" → return a JSON string value (not a list).
-        2. If output_format = "list" → always return a JSON array.
-        3. If multiple values appear for a list field, return all values as a list.
-        4. If one value appears for a list field, return a single-item list.
-        5. If no values appear for a list field, return an empty list ([]).
-        6. Never return a string where a list is required.
-        7. Never return a list where a string is required.
-        8. Do not add fields that are not in the blueprint.
-        9. Do not change field names. 
-    - Only extract information that is explicitly visible on this page. 
-    - Do NOT infer or guess values from other pages.
-    - All bounding boxes MUST correspond exactly to the visible source text.
-    - Bounding boxes must be in image pixel coordinates: [x1, y1, x2, y2].
-    - Return structured JSON only. No explanations or commentary.
-    - All fields must be present, even if there are no values found on this page, with a confidence score of 0.0.
-"""
+SYSTEM_PROMPT = ""
 
 USER_PROMPT = f"""
     Analyze the following image, which represents ONE page of a media contract.
+
+    Your task is to extract metadata for the fields in the <INPUT_SCHEMA> from a SINGLE PAGE of a media contract. The page is provided as an image. 
+    Take the provided JSON Schema <INPUT_SCHEMA> as the authoritative source to understand the fields, its description, its output format, its additional instructions, and its allowed values.
+    Use the CRITICAL RULES as the authoritative set of rules for extracting the metadata.
+
 
     <INPUT_SCHEMA>
     {BASE_INFO_SCHEMA}
@@ -142,15 +116,28 @@ USER_PROMPT = f"""
     }}
     
     CRITICAL RULES:
-     - If no metadata fields are found on this page, return an empty dictionary for the "extractions", and set "page_has_contract_content" to False.
-     - If metadata fields are found on this page, set "page_has_contract_content" to True.
-     - The "original_text" key should be the exact text chunk that was used to extract the value.
-     - The "bbox" key should be the bounding box co-ordinates of the original_text that was used to extract the value.
-     - The "confidence" key should be a float between 0.0 and 1.0 that represents the confidence in the extracted value.
-     - The "page_number" key should be the page number of the page that the text chunk was found on. Please use the page_number in the 'metadata' to get the page number.
-     - The "value" key should be the exact extracted text.
-     - The "field_name" key should be the name of the field that was extracted.
-     - The "extractions" key should be a dictionary of the extracted values.
+        - Extract metadata for the fields in the <INPUT_SCHEMA> schema only. Do not add or change fields that are not in the <INPUT_SCHEMA> schema.
+        - When extracting metadata, you must follow the list of additional_instructions for each JSON field that is specified in the <INPUT_SCHEMA> schema, if it exists. The list of additional_instructions describe how to interpret contract language, how to resolve ambiguity, and how to choose values. Always treat the all of the rules mentioned in the additional_instructions list as authoritative rules.
+        - If the list of allowed_values are explicitly specified in the <INPUT_SCHEMA> schema, you must match the extracted value to the allowed_values.
+        - If the allowed_values are specified as "ANY", you can extract any value that is relevant to the field.
+        - You must strictly follow the output_format defined in the <INPUT_SCHEMA> schema and the below 9 critical rules.
+            1. If output_format = "string" → return a JSON string value (not a list).
+            2. If output_format = "list" → always return a JSON array.
+            3. If multiple values appear for a list field, return all values as a list.
+            4. If one value appears for a list field, return a single-item list.
+            5. If no values appear for a list field, return an empty list ([]).
+        - Only extract information that is explicitly visible on this page. 
+        - Do NOT infer or guess values from other pages.
+        - All bounding boxes MUST correspond exactly to the visible source text. Bounding boxes must be in image pixel coordinates: [x1, y1, x2, y2].
+        - Return structured JSON only. No explanations or commentary.
+        - If no metadata fields are found on this page, return an empty dictionary for the "extractions", and set "page_has_contract_content" to False.
+        - The "original_text" key should be the exact text chunk that was used to extract the value.
+        - The "bbox" key should be the bounding box co-ordinates of the original_text that was used to extract the value.
+        - The "confidence" key should be a float between 0.0 and 1.0 that represents the confidence in the extracted value.
+        - The "page_number" key should be the page number of the page that the text chunk was found on. Please use the page_number in the 'metadata' to get the page number.
+        - The "value" key should be the exact extracted text.
+        - The "field_name" key should be the name of the field that was extracted.
+        - The "extractions" key should be a dictionary of the extracted values.
 """
 
 # ============================================================================

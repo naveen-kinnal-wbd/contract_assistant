@@ -240,19 +240,29 @@ class ContractService:
             # Run the LangGraph workflow
             final_state = await run_blueprint_refinement_workflow(document_group)
 
+            # Get the current workflow progress from the service store
+            # Note: We check the service store instead of final_state because
+            # when interrupt() is called, the node's return statement never executes,
+            # so final_state still has the old status. However, the node's
+            # _update_progress() call DOES update the service store before interrupt().
+            progress = cls.get_workflow_progress(group_id)
+            current_status = (
+                progress.current_status if progress else final_state.get("status")
+            )
+
             # Check if workflow failed
-            if final_state["status"] == WorkflowStatus.FAILED:
+            if current_status == WorkflowStatus.FAILED:
                 error_msg = final_state.get("error_message", "Workflow failed")
                 logger.error(f"[{group_id}] Workflow failed: {error_msg}")
                 return ProcessingResponse(
                     group_id=group_id,
                     status=WorkflowStatus.FAILED,
                     message=error_msg,
-                    workflow_progress=cls.get_workflow_progress(group_id),
+                    workflow_progress=progress,
                 )
 
             # Check if workflow is awaiting program selection (interrupted)
-            if final_state["status"] == WorkflowStatus.AWAITING_FEEDBACK:
+            if current_status == WorkflowStatus.AWAITING_FEEDBACK:
                 logger.info(
                     f"[{group_id}] Workflow interrupted - awaiting program selection"
                 )
@@ -262,7 +272,7 @@ class ContractService:
                     group_id=group_id,
                     status=WorkflowStatus.AWAITING_FEEDBACK,
                     message="Program selection required. Please select a program to continue.",
-                    workflow_progress=cls.get_workflow_progress(group_id),
+                    workflow_progress=progress,
                 )
 
             # Workflow completed successfully without needing selection
