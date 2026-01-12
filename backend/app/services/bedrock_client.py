@@ -68,6 +68,7 @@ class BedrockClient:
         self,
         prompt: str,
         images: list[dict[str, Any]],
+        schema: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """
         Prepare the request body for Bedrock model invocation.
@@ -79,11 +80,15 @@ class BedrockClient:
                 - media_type: e.g., "image/jpeg"
                 - filename: Document filename
                 - page: Page number
-            system_prompt: Optional system prompt for the model
+            schema: Optional schema dict to embed in the prompt as JSON
 
         Returns:
             Request body dictionary ready for model invocation
         """
+        # Embed schema into prompt if provided
+        if schema is not None:
+            prompt = prompt.replace("{INPUT_SCHEMA}", json.dumps(schema, indent=4))
+
         # Build content array starting with the text prompt
         content = [{"type": "text", "text": prompt}]
 
@@ -164,3 +169,42 @@ class BedrockClient:
             if item.get("type") == "text":
                 return item.get("text", "")
         return ""
+
+    def extract_json_response(self, response: dict[str, Any]) -> dict[str, Any]:
+        """
+        Extract and parse JSON content from a Bedrock response.
+
+        Handles markdown code block formatting (```json ... ```) that LLMs
+        commonly include in their responses.
+
+        Args:
+            response: The parsed response from invoke()
+
+        Returns:
+            Parsed JSON as a dictionary, or empty dict if parsing fails
+        """
+        # Extract text content from response
+        result = self.extract_text_response(response)
+        if not result:
+            logger.warning("No text content found in Bedrock response")
+            return {}
+
+        # Strip whitespace
+        result = result.strip()
+
+        # Remove markdown code block formatting if present
+        if result.startswith("```json"):
+            result = result.replace("```json", "", 1)
+        elif result.startswith("```"):
+            result = result.replace("```", "", 1)
+
+        if result.endswith("```"):
+            result = result[:-3]
+
+        # Parse the JSON
+        try:
+            return json.loads(result.strip())
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse LLM response as JSON: {e}")
+            logger.debug(f"Raw response: {result[:500]}...")
+            return {}

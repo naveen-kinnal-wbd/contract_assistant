@@ -8,17 +8,13 @@ AWS Bedrock LLM.
 import asyncio
 import json
 import logging
-from functools import lru_cache
 from typing import Any
 
-import boto3
-from botocore.config import Config as BotoConfig
-
-from config import get_upload_config
 from models.schemas import WorkflowStatus
 from services.bedrock_client import BedrockClient
-from workflows.state import WorkflowState
+from services.s3_client import fetch_image_from_s3
 from workflows.nodes.base import BaseWorkflowNode
+from workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +82,7 @@ BASE_INFO_SCHEMA = {
     }
 }
 
-SYSTEM_PROMPT = ""
-
-USER_PROMPT = f"""
+USER_PROMPT = """
     <PERSONA>
     You are a highly skilled legal data analyst specializing in entertainment and media contracts. With your extensive background in contract law and the entertainment industry, you understand the nuances of rights agreements, licensing terms, and media distribution contracts.
     </PERSONA>
@@ -101,23 +95,23 @@ USER_PROMPT = f"""
 
 
     <INPUT_SCHEMA>
-    {BASE_INFO_SCHEMA}
+    {INPUT_SCHEMA}
     </INPUT_SCHEMA>
 
     Return all detected metadata fields as per the above <INPUT_SCHEMA> found on this page, using the below output format for each field:
-    {{
+    {
         "page_has_contract_content": <boolean>,
-        "extractions": {{
-            "<field_name>": {{
+        "extractions": {
+            "<field_name>": {
                 "value": "<exact extracted text>",
                 "bbox": [x1, y1, x2, y2],
                 "confidence": <float between 0.0 and 1.0>,
                 "page_number": <integer>,
                 "original_text": "<source text chunk that was used to extract the value>"
-            }},
+            },
             ...
-        }}
-    }}
+        }
+    }
     
     <SYSTEM INSTRUCTIONS>
     - Extract metadata for the fields in the <INPUT_SCHEMA> schema only. Do not add or change fields that are not in the <INPUT_SCHEMA> schema.
@@ -142,112 +136,6 @@ USER_PROMPT = f"""
         5. If no values appear for a list field, return an empty list ([]).
     </SYSTEM INSTRUCTIONS>
 """
-
-# ============================================================================
-# S3 Image Fetching
-# ============================================================================
-
-_s3_boto_config = BotoConfig(
-    connect_timeout=5,
-    read_timeout=30,
-    max_pool_connections=10,
-    retries={"max_attempts": 3, "mode": "standard"},
-)
-
-
-@lru_cache(maxsize=1)
-def get_s3_client():
-    """Get cached S3 client for fetching images."""
-    upload_config = get_upload_config()
-    region = upload_config.get("region", "us-east-1")
-    return boto3.client("s3", region_name=region, config=_s3_boto_config)
-
-
-def parse_s3_uri(s3_uri: str) -> tuple[str, str]:
-    """Parse an S3 URI into bucket and key."""
-    path = s3_uri.replace("s3://", "")
-    parts = path.split("/", 1)
-    bucket = parts[0]
-    key = parts[1] if len(parts) > 1 else ""
-    return bucket, key
-
-
-def fetch_image_from_s3(s3_uri: str) -> dict[str, Any]:
-    """
-    Fetch an image from S3 and return image data with metadata.
-
-    The metadata (original_filename, page_number, media_type, file_type)
-    is retrieved from the S3 object's user-defined metadata.
-
-    Args:
-        s3_uri: S3 URI of the image
-
-    Returns:
-        Dict with keys: bytes, media_type, filename, page
-    """
-    s3_client = get_s3_client()
-    bucket, key = parse_s3_uri(s3_uri)
-
-    response = s3_client.get_object(Bucket=bucket, Key=key)
-    image_bytes = response["Body"].read()
-
-    # Get user-defined metadata from S3 object
-    s3_metadata = response.get("Metadata", {})
-
-    # Use metadata from S3, with fallbacks
-    media_type = s3_metadata.get("media_type")
-    if not media_type:
-        if key.lower().endswith(".jpeg") or key.lower().endswith(".jpg"):
-            media_type = "image/jpeg"
-        elif key.lower().endswith(".png"):
-            media_type = "image/png"
-        else:
-            media_type = "image/jpeg"
-
-    filename = s3_metadata.get("original_filename", s3_metadata.get("file_type", ""))
-    page = s3_metadata.get("page_number", "")
-
-    return {
-        "bytes": image_bytes,
-        "media_type": media_type,
-        "filename": filename,
-        "page": page,
-    }
-
-
-# ============================================================================
-# Response Parsing
-# ============================================================================
-
-
-def parse_llm_response(response_text: str) -> dict[str, Any]:
-    """Parse the LLM response text into a structured dictionary."""
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        pass
-
-    try:
-        if "```json" in response_text:
-            start = response_text.find("```json") + 7
-            end = response_text.find("```", start)
-            if end > start:
-                return json.loads(response_text[start:end].strip())
-        elif "```" in response_text:
-            start = response_text.find("```") + 3
-            end = response_text.find("```", start)
-            if end > start:
-                return json.loads(response_text[start:end].strip())
-    except json.JSONDecodeError:
-        pass
-
-    logger.warning(f"Failed to parse LLM response as JSON: {response_text[:200]}...")
-    return {}
-
-
-# ============================================================================
-# Main Agent Node Class
-# ============================================================================
 
 
 class BaseInfoExtractorNode(BaseWorkflowNode):
@@ -310,7 +198,7 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
         try:
             bedrock_client = BedrockClient()
 
-            # Collect all page images from all file types (metadata from S3)
+            # Collect all page images from all file types
             images_list = []
             for file_type, pages in page_images.items():
                 for page_num, s3_uri in pages.items():
@@ -331,22 +219,18 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
                 message=f"Extracting information from {total_pages} page(s)...",
             )
 
-            # Prepare and invoke the request
             request_body = bedrock_client.prepare_request(
                 prompt=USER_PROMPT,
                 images=images_list,
-                system_prompt=SYSTEM_PROMPT if SYSTEM_PROMPT.strip() else None,
+                schema=BASE_INFO_SCHEMA,
             )
 
-            # Run in executor to avoid blocking the event loop
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None, bedrock_client.invoke, request_body
             )
 
-            # Parse response
-            response_text = bedrock_client.extract_text_response(response)
-            extracted_data = parse_llm_response(response_text)
+            extracted_data = bedrock_client.extract_json_response(response)
 
             self.logger.info(
                 f"[{group_id}] Base info extraction completed successfully"

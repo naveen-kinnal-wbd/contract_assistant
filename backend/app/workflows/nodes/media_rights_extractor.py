@@ -8,18 +8,13 @@ AWS Bedrock LLM.
 import asyncio
 import json
 import logging
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
-import boto3
-from botocore.config import Config as BotoConfig
-
-from config import get_upload_config
 from models.schemas import WorkflowStatus
 from services.bedrock_client import BedrockClient
-from workflows.state import WorkflowState
+from services.s3_client import fetch_image_from_s3
 from workflows.nodes.base import BaseWorkflowNode
+from workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +67,7 @@ MEDIA_RIGHTS_SCHEMA = {
     }
 }
 
-USER_PROMPT = f"""
+USER_PROMPT = """
     <PERSONA>
     You are a highly skilled legal data analyst specializing in entertainment and media contracts.
     You are performing a PERCEPTION-ONLY task: locating and extracting relevant text from a contract page.
@@ -82,171 +77,46 @@ USER_PROMPT = f"""
     <TASK>
     Your task is to extract RAW CONTRACT LANGUAGE for the fields defined in <INPUT_SCHEMA> schema from a SINGLE PAGE of a media contract.
     The page is provided as an image. Read the page carefully and extract the relevant text for each field defined in the <INPUT_SCHEMA> schema.
-
-    This step is LIMITED TO TEXT EXTRACTION ONLY.
-    All normalization, interpretation, and allowed_values matching will happen in later steps.
+    This step is LIMITED TO TEXT EXTRACTION ONLY. All normalization, interpretation, and allowed_values matching will happen in later steps.
+    Use the below <SYSTEM INSTRUCTIONS> as the authoritative set of instructions for extracting the metadata.
     </TASK>
 
     <INPUT_SCHEMA>
-    {json.dumps(MEDIA_RIGHTS_SCHEMA, indent=4)}
+    {INPUT_SCHEMA}
     </INPUT_SCHEMA>
-
-    <CRITICAL EXTRACTION PRINCIPLES>
-    1. Use the description and extraction_constraints in the <INPUT_SCHEMA> schema to understand the fields and their extraction constraints. Follow the description and extraction constraints strictly.
-    2. Use the 'extraction_constraints' in the <INPUT_SCHEMA> schema for each field to extract the value, if they are specified. The 'extraction_constraints' are a list of instructions that describe how to find the explicit text that corresponds to the field.
-    3. DO NOT infer, interpret, normalize, or map values.
-    4. DO NOT guess missing information.
-    5. DO NOT combine information across pages.
-    6. If a field is not explicitly mentioned, do not extract it.
-    </CRITICAL EXTRACTION PRINCIPLES>
-
-    <FOR EACH FIELD YOU EXTRACT>
-    You MUST extract TWO distinct text spans:
-
-    1. raw_value_snippet:
-    - The SHORTEST possible text span that directly expresses the value.
-    - Must be value-dense.
-    - Typically 3–20 words.
-
-    2. context_clause:
-    - The full sentence or paragraph that contains the raw_value_snippet.
-    - Used for auditability and downstream reasoning.
-
-    3. bbox:
-    - The bounding box co-ordinates of the context_clause that was used to extract the value.
-    - Bounding boxes must be in image pixel coordinates: [x1, y1, x2, y2].
-
-    4. confidence:
-    - A float between 0.0 and 1.0 that represents the confidence in the extracted value.
-
-    5. page_number:
-    - The page number of the page that the text chunk was found on. Please use the page_number in the 'metadata' to get the page number.
-    </FOR EACH FIELD YOU EXTRACT>
 
     <OUTPUT FORMAT>
     Return structured JSON ONLY, using the following format:
 
-    {{
-        "page_has_contract_content": <boolean>,
-        "extractions": {{
-            "<field_name>": {{
-                "raw_value_snippet": "<minimal value text>",
-                "context_clause": "<full contextual clause>",
+    {
+        "<field_name>": {
+            "context_clause": "<full contextual clause>",
+            "raw_value_snippet": "<minimal value text>",
+            "confidence": <float between 0.0 and 1.0>,
+            "reference": { 
+                "page_number": <integer>,
+                "location_in_page": "<location in page>",
                 "bbox": [x1, y1, x2, y2],
-                "confidence": <float between 0.0 and 1.0>,
-                "page_number": <integer>
-            }}
-        }}
-    }}
-
-    <OUTPUT RULES>
-        - If no relevant contract content exists on the page:
-            - Set "page_has_contract_content" to false
-            - Return an empty "extractions" object
-        - If a field does not appear, omit it from "extractions"
-        - Bounding boxes MUST exactly match visible source text provided in the context_clause key.
-        - Confidence reflects certainty that the extracted text corresponds to the field (not correctness of meaning)
-        - Do NOT include explanations or commentary
-    </OUTPUT RULES>
-"""
-
-# ============================================================================
-# S3 Image Fetching
-# ============================================================================
-
-_s3_boto_config = BotoConfig(
-    connect_timeout=5,
-    read_timeout=30,
-    max_pool_connections=10,
-    retries={"max_attempts": 3, "mode": "standard"},
-)
-
-
-@lru_cache(maxsize=1)
-def get_s3_client():
-    """Get cached S3 client for fetching images."""
-    upload_config = get_upload_config()
-    region = upload_config.get("region", "us-east-1")
-    return boto3.client("s3", region_name=region, config=_s3_boto_config)
-
-
-def parse_s3_uri(s3_uri: str) -> tuple[str, str]:
-    """Parse an S3 URI into bucket and key."""
-    path = s3_uri.replace("s3://", "")
-    parts = path.split("/", 1)
-    bucket = parts[0]
-    key = parts[1] if len(parts) > 1 else ""
-    return bucket, key
-
-
-def fetch_image_from_s3(s3_uri: str) -> dict[str, Any]:
-    """
-    Fetch an image from S3 and return image data with metadata.
-
-    The metadata (original_filename, page_number, media_type, file_type)
-    is retrieved from the S3 object's user-defined metadata.
-
-    Args:
-        s3_uri: S3 URI of the image
-
-    Returns:
-        Dict with keys: bytes, media_type, filename, page
-    """
-    s3_client = get_s3_client()
-    bucket, key = parse_s3_uri(s3_uri)
-
-    response = s3_client.get_object(Bucket=bucket, Key=key)
-    image_bytes = response["Body"].read()
-
-    # Get user-defined metadata from S3 object
-    s3_metadata = response.get("Metadata", {})
-
-    # Use metadata from S3, with fallbacks
-    media_type = s3_metadata.get("media_type")
-    identifier_name = s3_metadata.get("identifier_name", "")
-    page_number = s3_metadata.get("page_number", "")
-
-    return {
-        "bytes": image_bytes,
-        "media_type": media_type,
-        "identifier_name": identifier_name,
-        "page_number": page_number,
+            }
+        }
+        ...
     }
+    </OUTPUT FORMAT>
 
-
-# ============================================================================
-# Response Parsing
-# ============================================================================
-
-
-def parse_llm_response(response_text: str) -> dict[str, Any]:
-    """Parse the LLM response text into a structured dictionary."""
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        pass
-
-    try:
-        if "```json" in response_text:
-            start = response_text.find("```json") + 7
-            end = response_text.find("```", start)
-            if end > start:
-                return json.loads(response_text[start:end].strip())
-        elif "```" in response_text:
-            start = response_text.find("```") + 3
-            end = response_text.find("```", start)
-            if end > start:
-                return json.loads(response_text[start:end].strip())
-    except json.JSONDecodeError:
-        pass
-
-    logger.warning(f"Failed to parse LLM response as JSON: {response_text[:200]}...")
-    return {}
-
-
-# ============================================================================
-# Main Agent Node Class
-# ============================================================================
+    <SYSTEM INSTRUCTIONS>
+    - Use the description and extraction_constraints in the <INPUT_SCHEMA> schema to understand the fields and their extraction constraints. Follow the description and extraction constraints strictly.
+    - Use the 'extraction_constraints' in the <INPUT_SCHEMA> schema for each field to extract the value, if they are specified. The 'extraction_constraints' are a list of instructions that describe how to find the explicit text that corresponds to the field.
+    - DO NOT infer, interpret, normalize, or map values. DO NOT guess missing information.
+    - Return structured JSON only. No explanations or commentary.
+    - The "field_name" key in the <OUTPUT FORMAT> should be the name of the field that was extracted from the <INPUT_SCHEMA> schema.
+    - The "context_clause" key in the <OUTPUT FORMAT> should be the full sentence or paragraph that contains the raw_value_snippet. It will be used for auditability and downstream reasoning.
+    - The "raw_value_snippet" key in the <OUTPUT FORMAT> should be the shortest possible text span that directly expresses the value. It must be value-dense. Typically 3–20 words.
+    - The "confidence" key in the <OUTPUT FORMAT> should be a float between 0.0 and 1.0 that represents the confidence in the extracted value.
+    - The "bbox" key in the <OUTPUT FORMAT> should be the bounding box co-ordinates of the context_clause that was extracted. Bounding boxes must be in image pixel coordinates: [x1, y1, x2, y2].
+    - The "page_number" key in the <OUTPUT FORMAT> should be the page number of the page that the text chunk was found on.
+    - The "location_in_page" key in the <OUTPUT FORMAT> should be the location in the page that the text chunk was found on. It should be a string that describes the location of the text chunk in the page.
+    </SYSTEM INSTRUCTIONS>
+"""
 
 
 class MediaRightsExtractorNode(BaseWorkflowNode):
@@ -309,7 +179,7 @@ class MediaRightsExtractorNode(BaseWorkflowNode):
         try:
             bedrock_client = BedrockClient()
 
-            # Collect all page images from all file types (metadata from S3)
+            # Collect all page images from all file types
             images_list = []
             for file_type, pages in page_images.items():
                 for page_num, s3_uri in pages.items():
@@ -330,21 +200,18 @@ class MediaRightsExtractorNode(BaseWorkflowNode):
                 message=f"Extracting media rights from {total_pages} page(s)...",
             )
 
-            # Prepare and invoke the request
             request_body = bedrock_client.prepare_request(
                 prompt=USER_PROMPT,
                 images=images_list,
+                schema=MEDIA_RIGHTS_SCHEMA,
             )
 
-            # Run in executor to avoid blocking the event loop
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None, bedrock_client.invoke, request_body
             )
 
-            # Parse response
-            response_text = bedrock_client.extract_text_response(response)
-            extracted_data = parse_llm_response(response_text)
+            extracted_data = bedrock_client.extract_json_response(response)
 
             self.logger.info(
                 f"[{group_id}] Media rights extraction completed successfully"

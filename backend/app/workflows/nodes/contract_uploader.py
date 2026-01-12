@@ -5,48 +5,20 @@ This node handles uploading documents to S3 with page extraction
 and optional image conversion.
 """
 
+import asyncio
 import base64
 import logging
-from functools import lru_cache
 from typing import Any
 
-import boto3
 import fitz  # PyMuPDF
-from botocore.config import Config as BotoConfig
-from botocore.exceptions import ClientError
 
 from config import get_processing_config, get_upload_config
 from models.schemas import WorkflowStatus
-from workflows.state import WorkflowState
+from services.s3_client import build_upload_path, get_s3_client, upload_to_s3
 from workflows.nodes.base import BaseWorkflowNode
+from workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
-
-# Boto3 config with connection pooling and reasonable timeouts
-_boto_config = BotoConfig(
-    connect_timeout=5,
-    read_timeout=30,
-    max_pool_connections=10,
-    retries={"max_attempts": 3, "mode": "standard"},
-)
-
-
-@lru_cache(maxsize=1)
-def get_s3_client():
-    """Get cached S3 client with configured region and connection pooling."""
-    upload_config = get_upload_config()
-    region = upload_config.get("region", "us-east-1")
-    return boto3.client("s3", region_name=region, config=_boto_config)
-
-
-def build_upload_path(identifier_name: str, file_type: str) -> str:
-    """
-    Build the S3 upload path for a document.
-    Format: <path_prefix>/<identifier_name>/<file_type>/
-    """
-    upload_config = get_upload_config()
-    path_prefix = upload_config.get("path_prefix", "uploaded")
-    return f"{path_prefix}/{identifier_name}/{file_type}"
 
 
 def _extract_pdf_pages(
@@ -68,8 +40,6 @@ def _extract_pdf_pages(
         Tuple of (list of page bytes, content_type, file_extension)
     """
     page_bytes_list = []
-
-    # Open PDF from bytes
     pdf_document = fitz.open(stream=pdf_content, filetype="pdf")
 
     try:
@@ -80,17 +50,12 @@ def _extract_pdf_pages(
                 # Calculate zoom factor based on DPI (72 is the base DPI for PDF)
                 zoom = dpi / 72
                 matrix = fitz.Matrix(zoom, zoom)
-
-                # Render page to pixmap
                 pixmap = page.get_pixmap(matrix=matrix)
 
                 # Convert to image bytes
-                if image_format.lower() == "jpeg":
-                    page_bytes = pixmap.tobytes("jpeg")
-                elif image_format.lower() == "png":
+                if image_format.lower() == "png":
                     page_bytes = pixmap.tobytes("png")
                 else:
-                    # Default to JPEG
                     page_bytes = pixmap.tobytes("jpeg")
 
                 page_bytes_list.append(page_bytes)
@@ -117,24 +82,6 @@ def _extract_pdf_pages(
     return page_bytes_list, content_type, file_extension
 
 
-def _sync_upload_document(
-    s3_client,
-    bucket: str,
-    s3_key: str,
-    content: bytes,
-    content_type: str,
-    metadata: dict[str, str],
-) -> None:
-    """Synchronous S3 upload (to be run in thread pool)."""
-    s3_client.put_object(
-        Bucket=bucket,
-        Key=s3_key,
-        Body=content,
-        ContentType=content_type,
-        Metadata=metadata,
-    )
-
-
 class ContractUploaderNode(BaseWorkflowNode):
     """
     Upload documents to S3 with page extraction.
@@ -151,7 +98,6 @@ class ContractUploaderNode(BaseWorkflowNode):
 
     async def _upload_document_pages(
         self,
-        s3_client,
         bucket: str,
         upload_path: str,
         doc_content: bytes,
@@ -167,7 +113,6 @@ class ContractUploaderNode(BaseWorkflowNode):
         Extract and upload each page of a document to S3.
 
         Args:
-            s3_client: Boto3 S3 client
             bucket: S3 bucket name
             upload_path: Base S3 path for uploads
             doc_content: Raw document bytes
@@ -182,9 +127,6 @@ class ContractUploaderNode(BaseWorkflowNode):
         Returns:
             Tuple of (list of uploaded S3 keys, dict mapping page numbers to S3 URIs)
         """
-        import asyncio
-
-        # Update progress: extracting pages
         self._update_progress(
             group_id=group_id,
             identifier_name=identifier_name,
@@ -194,7 +136,6 @@ class ContractUploaderNode(BaseWorkflowNode):
             message=f"Extracting pages from {doc_filename}...",
         )
 
-        # Extract pages (either as images or as individual PDFs)
         page_bytes_list, content_type, file_extension = _extract_pdf_pages(
             doc_content, convert_to_image, image_format, dpi
         )
@@ -203,13 +144,10 @@ class ContractUploaderNode(BaseWorkflowNode):
         page_uri_mapping: dict[int, str] = {}
 
         for page_num, page_bytes in enumerate(page_bytes_list, start=1):
-            # Build S3 key: <upload_path>/<page_number>.<extension>
             s3_key = f"{upload_path}/{page_num}.{file_extension}"
 
-            # Upload to S3
             await asyncio.to_thread(
-                _sync_upload_document,
-                s3_client,
+                upload_to_s3,
                 bucket,
                 s3_key,
                 page_bytes,
@@ -247,7 +185,6 @@ class ContractUploaderNode(BaseWorkflowNode):
 
         self.logger.info(f"[{group_id}] Starting document upload to S3")
 
-        # Update progress: starting upload
         self._update_progress(
             group_id=group_id,
             identifier_name=identifier_name,
@@ -261,8 +198,6 @@ class ContractUploaderNode(BaseWorkflowNode):
         processing_config = get_processing_config()
 
         bucket = upload_config.get("bucket", "contract-assistant-workflow")
-
-        # Get image conversion settings from config
         convert_to_image = processing_config.get("convert_to_image", True)
         image_format = processing_config.get("image_format", "png")
         image_dpi = processing_config.get("image_dpi", 150)
@@ -271,11 +206,11 @@ class ContractUploaderNode(BaseWorkflowNode):
         page_images: dict[str, dict[int, str]] = {}
 
         try:
-            s3_client = get_s3_client()
+            # Validate S3 client is available
+            get_s3_client()
 
             total_docs = len(document_group.documents)
             for doc_index, doc in enumerate(document_group.documents, start=1):
-                # Update progress for each document
                 self._update_progress(
                     group_id=group_id,
                     identifier_name=identifier_name,
@@ -285,19 +220,15 @@ class ContractUploaderNode(BaseWorkflowNode):
                     message=f"Processing document {doc_index}/{total_docs}: {doc.filename}",
                 )
 
-                # Build S3 key: uploaded/<identifier_name>/<file_type>/<filename>
                 upload_path = build_upload_path(identifier_name, doc.file_type.value)
 
-                # Decode base64 content from document
                 encoded_content = getattr(doc, "content", None)
                 doc_content = (
                     base64.b64decode(encoded_content) if encoded_content else b""
                 )
 
                 if doc_content:
-                    # Extract and upload each page
                     keys, page_mapping = await self._upload_document_pages(
-                        s3_client=s3_client,
                         bucket=bucket,
                         upload_path=upload_path,
                         doc_content=doc_content,
@@ -311,7 +242,6 @@ class ContractUploaderNode(BaseWorkflowNode):
                     )
                     uploaded_files.extend(keys)
 
-                    # Store page URIs under the file type
                     if doc.file_type.value not in page_images:
                         page_images[doc.file_type.value] = {}
                     page_images[doc.file_type.value].update(page_mapping)
@@ -320,7 +250,6 @@ class ContractUploaderNode(BaseWorkflowNode):
                 f"[{group_id}] All {len(uploaded_files)} documents uploaded successfully"
             )
 
-            # Update progress: upload complete
             self._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
@@ -335,27 +264,6 @@ class ContractUploaderNode(BaseWorkflowNode):
                 step_id="upload_complete",
                 uploaded_files=uploaded_files,
                 upload_path=f"s3://{bucket}/{path_prefix}",
-                page_images=page_images if page_images else None,
-            )
-
-        except ClientError as e:
-            error_msg = f"S3 upload failed: {str(e)}"
-            self.logger.error(f"[{group_id}] {error_msg}")
-
-            self._update_progress(
-                group_id=group_id,
-                identifier_name=identifier_name,
-                step_id="upload_failed",
-                step_name="Document Upload",
-                status=WorkflowStatus.FAILED,
-                message=error_msg,
-            )
-
-            return self._create_error_response(
-                step_id="upload_failed",
-                error_message=error_msg,
-                uploaded_files=uploaded_files,
-                upload_path=None,
                 page_images=page_images if page_images else None,
             )
 
