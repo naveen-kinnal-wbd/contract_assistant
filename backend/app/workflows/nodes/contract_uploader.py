@@ -220,6 +220,7 @@ class ContractUploaderNode(BaseWorkflowNode):
                     "file_type": file_type,
                     "original_filename": doc_filename,
                     "page_number": str(page_num),
+                    "media_type": content_type,
                 },
             )
 
@@ -263,7 +264,7 @@ class ContractUploaderNode(BaseWorkflowNode):
 
         # Get image conversion settings from config
         convert_to_image = processing_config.get("convert_to_image", True)
-        image_format = processing_config.get("image_format", "jpeg")
+        image_format = processing_config.get("image_format", "png")
         image_dpi = processing_config.get("image_dpi", 150)
 
         uploaded_files = []

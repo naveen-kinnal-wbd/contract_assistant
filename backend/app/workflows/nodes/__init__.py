@@ -30,7 +30,6 @@ from workflows.nodes.finalize import FinalizeWorkflowNode
 # Helper functions that may be useful externally
 from workflows.nodes.base_info_extractor import (
     parse_llm_response,
-    aggregate_page_extractions,
     fetch_image_from_s3,
     parse_s3_uri,
     BASE_INFO_SCHEMA,
@@ -47,7 +46,6 @@ __all__ = [
     "FinalizeWorkflowNode",
     # Helper functions
     "parse_llm_response",
-    "aggregate_page_extractions",
     "fetch_image_from_s3",
     "parse_s3_uri",
     "BASE_INFO_SCHEMA",

@@ -2,7 +2,7 @@
 Base info extractor agent node for LangGraph workflow.
 
 This node extracts basic contract metadata from document images using
-AWS Bedrock LLM with parallel processing per page.
+AWS Bedrock LLM.
 """
 
 import asyncio
@@ -14,7 +14,7 @@ from typing import Any
 import boto3
 from botocore.config import Config as BotoConfig
 
-from config import get_llm_config, get_upload_config
+from config import get_upload_config
 from models.schemas import WorkflowStatus
 from services.bedrock_client import BedrockClient
 from workflows.state import WorkflowState
@@ -89,11 +89,15 @@ BASE_INFO_SCHEMA = {
 SYSTEM_PROMPT = ""
 
 USER_PROMPT = f"""
-    Analyze the following image, which represents ONE page of a media contract.
+    <PERSONA>
+    You are a highly skilled legal data analyst specializing in entertainment and media contracts. With your extensive background in contract law and the entertainment industry, you understand the nuances of rights agreements, licensing terms, and media distribution contracts.
+    </PERSONA>
 
+    <TASK>
     Your task is to extract metadata for the fields in the <INPUT_SCHEMA> from a SINGLE PAGE of a media contract. The page is provided as an image. 
     Take the provided JSON Schema <INPUT_SCHEMA> as the authoritative source to understand the fields, its description, its output format, its additional instructions, and its allowed values.
-    Use the CRITICAL RULES as the authoritative set of rules for extracting the metadata.
+    Use the below <SYSTEM INSTRUCTIONS> as the authoritative set of instructions for extracting the metadata.
+    </TASK>
 
 
     <INPUT_SCHEMA>
@@ -115,36 +119,34 @@ USER_PROMPT = f"""
         }}
     }}
     
-    CRITICAL RULES:
-        - Extract metadata for the fields in the <INPUT_SCHEMA> schema only. Do not add or change fields that are not in the <INPUT_SCHEMA> schema.
-        - When extracting metadata, you must follow the list of additional_instructions for each JSON field that is specified in the <INPUT_SCHEMA> schema, if it exists. The list of additional_instructions describe how to interpret contract language, how to resolve ambiguity, and how to choose values. Always treat the all of the rules mentioned in the additional_instructions list as authoritative rules.
-        - If the list of allowed_values are explicitly specified in the <INPUT_SCHEMA> schema, you must match the extracted value to the allowed_values.
-        - If the allowed_values are specified as "ANY", you can extract any value that is relevant to the field.
-        - You must strictly follow the output_format defined in the <INPUT_SCHEMA> schema and the below 9 critical rules.
-            1. If output_format = "string" → return a JSON string value (not a list).
-            2. If output_format = "list" → always return a JSON array.
-            3. If multiple values appear for a list field, return all values as a list.
-            4. If one value appears for a list field, return a single-item list.
-            5. If no values appear for a list field, return an empty list ([]).
-        - Only extract information that is explicitly visible on this page. 
-        - Do NOT infer or guess values from other pages.
-        - All bounding boxes MUST correspond exactly to the visible source text. Bounding boxes must be in image pixel coordinates: [x1, y1, x2, y2].
-        - Return structured JSON only. No explanations or commentary.
-        - If no metadata fields are found on this page, return an empty dictionary for the "extractions", and set "page_has_contract_content" to False.
-        - The "original_text" key should be the exact text chunk that was used to extract the value.
-        - The "bbox" key should be the bounding box co-ordinates of the original_text that was used to extract the value.
-        - The "confidence" key should be a float between 0.0 and 1.0 that represents the confidence in the extracted value.
-        - The "page_number" key should be the page number of the page that the text chunk was found on. Please use the page_number in the 'metadata' to get the page number.
-        - The "value" key should be the exact extracted text.
-        - The "field_name" key should be the name of the field that was extracted.
-        - The "extractions" key should be a dictionary of the extracted values.
+    <SYSTEM INSTRUCTIONS>
+    - Extract metadata for the fields in the <INPUT_SCHEMA> schema only. Do not add or change fields that are not in the <INPUT_SCHEMA> schema.
+    - When extracting metadata, you must follow the list of additional_instructions for each JSON field that is specified in the <INPUT_SCHEMA> schema, if it exists. The list of additional_instructions describe how to interpret contract language, how to resolve ambiguity, and how to choose values. Always treat the all of the rules mentioned in the additional_instructions list as authoritative rules.
+    - If the list of allowed_values are explicitly specified in the <INPUT_SCHEMA> schema for a JSON field, you must match the extracted values to the allowed_values. Treat the allowed_values in the <INPUT_SCHEMA> schema as the authoritative set of values for the field.
+    - Do not extract values that are not in the allowed_values for a JSON field, unless the allowed_values are specified as "ANY".
+    - If the allowed_values are specified as "ANY", you can extract any value that is relevant to the field.
+    - All bounding boxes MUST correspond exactly to the visible source text. Bounding boxes must be in image pixel coordinates: [x1, y1, x2, y2].
+    - Return structured JSON only. No explanations or commentary.
+    - If no metadata fields are found on this page, return an empty dictionary for the "extractions", and set "page_has_contract_content" to False.
+    - The "original_text" key should be the paragraph of text that was used to extract the value, that provides the most context for the extracted value.
+    - The "bbox" key should be the bounding box co-ordinates of the original_text that was used to extract the value.
+    - The "confidence" key should be a float between 0.0 and 1.0 that represents the confidence in the extracted value.
+    - The "page_number" key should be the page number of the page that the text chunk was found on. Please use the page_number in the 'metadata' to get the page number.
+    - The "value" key should be the exact extracted text.
+    - The "field_name" key should be the name of the field that was extracted.
+    - Finally, in addition to the above critical rules, You must strictly follow the output_format defined in the <INPUT_SCHEMA> schema and the below 5 output format rules.
+        1. If output_format = "string" → return a JSON string value (not a list).
+        2. If output_format = "list" → always return a JSON array.
+        3. If multiple values appear for a list field, return all values as a list.
+        4. If one value appears for a list field, return a single-item list.
+        5. If no values appear for a list field, return an empty list ([]).
+    </SYSTEM INSTRUCTIONS>
 """
 
 # ============================================================================
 # S3 Image Fetching
 # ============================================================================
 
-# Boto3 config for S3 operations
 _s3_boto_config = BotoConfig(
     connect_timeout=5,
     read_timeout=30,
@@ -162,16 +164,7 @@ def get_s3_client():
 
 
 def parse_s3_uri(s3_uri: str) -> tuple[str, str]:
-    """
-    Parse an S3 URI into bucket and key.
-
-    Args:
-        s3_uri: S3 URI in format s3://bucket/key
-
-    Returns:
-        Tuple of (bucket, key)
-    """
-    # Remove s3:// prefix
+    """Parse an S3 URI into bucket and key."""
     path = s3_uri.replace("s3://", "")
     parts = path.split("/", 1)
     bucket = parts[0]
@@ -179,15 +172,18 @@ def parse_s3_uri(s3_uri: str) -> tuple[str, str]:
     return bucket, key
 
 
-def fetch_image_from_s3(s3_uri: str) -> tuple[bytes, str]:
+def fetch_image_from_s3(s3_uri: str) -> dict[str, Any]:
     """
-    Fetch an image from S3 and return bytes with media type.
+    Fetch an image from S3 and return image data with metadata.
+
+    The metadata (original_filename, page_number, media_type, file_type)
+    is retrieved from the S3 object's user-defined metadata.
 
     Args:
         s3_uri: S3 URI of the image
 
     Returns:
-        Tuple of (image_bytes, media_type)
+        Dict with keys: bytes, media_type, filename, page
     """
     s3_client = get_s3_client()
     bucket, key = parse_s3_uri(s3_uri)
@@ -195,107 +191,42 @@ def fetch_image_from_s3(s3_uri: str) -> tuple[bytes, str]:
     response = s3_client.get_object(Bucket=bucket, Key=key)
     image_bytes = response["Body"].read()
 
-    # Determine media type from key extension
-    if key.lower().endswith(".jpeg") or key.lower().endswith(".jpg"):
-        media_type = "image/jpeg"
-    elif key.lower().endswith(".png"):
-        media_type = "image/png"
-    else:
-        # Default to jpeg
-        media_type = "image/jpeg"
+    # Get user-defined metadata from S3 object
+    s3_metadata = response.get("Metadata", {})
 
-    return image_bytes, media_type
-
-
-# ============================================================================
-# Result Aggregation
-# ============================================================================
-
-
-def aggregate_page_extractions(
-    page_results: list[dict[str, Any]],
-    schema: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    Aggregate page-level extractions into document-level metadata.
-
-    For each field in the schema, pick the highest-confidence candidate
-    from across all pages, preserving bbox and confidence.
-
-    Args:
-        page_results: List of extraction results from each page
-        schema: The base info schema defining expected fields
-
-    Returns:
-        Aggregated metadata dictionary with full extraction info
-    """
-    aggregated = {}
-    schema_fields = schema.get("schema", {})
-
-    for field_name, field_config in schema_fields.items():
-        output_format = field_config.get("output_format", "string")
-        candidates = []
-
-        # Collect all extractions for this field from all pages
-        for result in page_results:
-            if not result.get("success") or not result.get("extracted_data"):
-                continue
-
-            extractions = result["extracted_data"].get("extractions", {})
-            if field_name not in extractions:
-                continue
-
-            field_data = extractions[field_name]
-            # Normalize to list for uniform processing
-            items = field_data if isinstance(field_data, list) else [field_data]
-            candidates.extend(items)
-
-        # Select best candidate based on output format
-        if not candidates:
-            aggregated[field_name] = [] if output_format == "list" else None
-            continue
-
-        if output_format == "list":
-            # Find unique items by value, keeping highest confidence for each
-            unique_items = {}
-            for item in candidates:
-                value_key = str(item.get("value"))
-
-                # Keep item with highest confidence for each unique value
-                if value_key not in unique_items or item.get(
-                    "confidence", 0
-                ) > unique_items[value_key].get("confidence", 0):
-                    unique_items[value_key] = item
-
-            aggregated[field_name] = list(unique_items.values())
+    # Use metadata from S3, with fallbacks
+    media_type = s3_metadata.get("media_type")
+    if not media_type:
+        if key.lower().endswith(".jpeg") or key.lower().endswith(".jpg"):
+            media_type = "image/jpeg"
+        elif key.lower().endswith(".png"):
+            media_type = "image/png"
         else:
-            # For string fields, pick the dict with highest confidence
-            best = max(candidates, key=lambda x: x.get("confidence", 0))
-            aggregated[field_name] = best
+            media_type = "image/jpeg"
 
-    return aggregated
+    filename = s3_metadata.get("original_filename", s3_metadata.get("file_type", ""))
+    page = s3_metadata.get("page_number", "")
+
+    return {
+        "bytes": image_bytes,
+        "media_type": media_type,
+        "filename": filename,
+        "page": page,
+    }
+
+
+# ============================================================================
+# Response Parsing
+# ============================================================================
 
 
 def parse_llm_response(response_text: str) -> dict[str, Any]:
-    """
-    Parse the LLM response text into a structured dictionary.
-
-    Expects the LLM to return JSON format.
-
-    Args:
-        response_text: Raw text response from LLM
-
-    Returns:
-        Parsed dictionary or empty dict if parsing fails
-    """
+    """Parse the LLM response text into a structured dictionary."""
     try:
-        # Try to find JSON in the response
-        # First, try direct parsing
         return json.loads(response_text)
     except json.JSONDecodeError:
         pass
 
-    # Try to extract JSON from markdown code blocks
     try:
         if "```json" in response_text:
             start = response_text.find("```json") + 7
@@ -326,8 +257,8 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
     This agent:
     1. Fetches images from S3 using page_images from state
     2. Uses the BASE_INFO_SCHEMA for extraction
-    3. Makes parallel LLM calls (one per page image)
-    4. Aggregates results and picks highest-confidence values
+    3. Makes a single LLM call with all page images
+    4. Parses and returns the extracted data
     """
 
     def __init__(self):
@@ -348,7 +279,6 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
 
         self.logger.info(f"[{group_id}] Starting base info extraction")
 
-        # Update progress
         self._update_progress(
             group_id=group_id,
             identifier_name=identifier_name,
@@ -358,7 +288,6 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
             message="Starting contract information extraction...",
         )
 
-        # Check if we have images to process
         if not page_images:
             error_msg = "No page images available for extraction"
             self.logger.error(f"[{group_id}] {error_msg}")
@@ -379,26 +308,16 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
             )
 
         try:
-            # Load the schema
-            schema = BASE_INFO_SCHEMA
-
-            # Initialize Bedrock client
             bedrock_client = BedrockClient()
 
-            # Collect all page images from all file types
-            all_pages = []
+            # Collect all page images from all file types (metadata from S3)
+            images_list = []
             for file_type, pages in page_images.items():
                 for page_num, s3_uri in pages.items():
-                    all_pages.append(
-                        {
-                            "file_type": file_type,
-                            "page_number": page_num,
-                            "s3_uri": s3_uri,
-                        }
-                    )
-                    break  # Only process one page per file type for now
+                    image_data = fetch_image_from_s3(s3_uri)
+                    images_list.append(image_data)
 
-            total_pages = len(all_pages)
+            total_pages = len(images_list)
             self.logger.info(
                 f"[{group_id}] Processing {total_pages} page(s) for extraction"
             )
@@ -406,97 +325,28 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
             self._update_progress(
                 group_id=group_id,
                 identifier_name=identifier_name,
-                step_id="base_info_fetching",
-                step_name="Base Info Extraction",
-                status=WorkflowStatus.IN_PROGRESS,
-                message=f"Fetching {total_pages} page image(s) from storage...",
-            )
-
-            # Prepare requests for parallel processing
-            requests = []
-            for page_info in all_pages:
-                # Fetch image from S3
-                image_bytes, media_type = fetch_image_from_s3(page_info["s3_uri"])
-
-                requests.append(
-                    {
-                        "user_prompt": USER_PROMPT,
-                        "images": [(image_bytes, media_type)],
-                        "system_prompt": (
-                            SYSTEM_PROMPT if SYSTEM_PROMPT.strip() else None
-                        ),
-                        "metadata": {
-                            "file_type": page_info["file_type"],
-                            "page_number": page_info["page_number"],
-                            "s3_uri": page_info["s3_uri"],
-                        },
-                    }
-                )
-
-            self._update_progress(
-                group_id=group_id,
-                identifier_name=identifier_name,
                 step_id="base_info_extracting",
                 step_name="Base Info Extraction",
                 status=WorkflowStatus.IN_PROGRESS,
-                message=f"Extracting information from {total_pages} page(s) in parallel...",
+                message=f"Extracting information from {total_pages} page(s)...",
             )
 
-            # Make parallel LLM calls in a thread pool to avoid blocking the event loop
-            # This allows FastAPI to continue serving progress poll requests during extraction
+            # Prepare and invoke the request
+            request_body = bedrock_client.prepare_request(
+                prompt=USER_PROMPT,
+                images=images_list,
+                system_prompt=SYSTEM_PROMPT if SYSTEM_PROMPT.strip() else None,
+            )
+
+            # Run in executor to avoid blocking the event loop
             loop = asyncio.get_event_loop()
-            llm_results = await loop.run_in_executor(
-                None, bedrock_client.invoke_parallel, requests
+            response = await loop.run_in_executor(
+                None, bedrock_client.invoke, request_body
             )
 
-            # Process results
-            page_extractions = []
-            successful_pages = 0
-
-            for result in llm_results:
-                if result["success"]:
-                    response_text = bedrock_client.extract_text_response(
-                        result["response"]
-                    )
-                    extracted_data = parse_llm_response(response_text)
-
-                    page_extractions.append(
-                        {
-                            "success": True,
-                            "metadata": result["metadata"],
-                            "extracted_data": extracted_data,
-                        }
-                    )
-                    successful_pages += 1
-                else:
-                    page_extractions.append(
-                        {
-                            "success": False,
-                            "metadata": result["metadata"],
-                            "extracted_data": {},
-                            "error": result["error"],
-                        }
-                    )
-                    self.logger.warning(
-                        f"[{group_id}] Page extraction failed for page "
-                        f"{result['metadata'].get('page_number')}: {result['error']}"
-                    )
-
-            self.logger.info(
-                f"[{group_id}] Successfully extracted from {successful_pages}/{total_pages} pages"
-            )
-
-            # Aggregate results
-            self._update_progress(
-                group_id=group_id,
-                identifier_name=identifier_name,
-                step_id="base_info_aggregating",
-                step_name="Base Info Extraction",
-                status=WorkflowStatus.IN_PROGRESS,
-                message="Aggregating extracted information...",
-            )
-
-            aggregated_info = aggregate_page_extractions(page_extractions, schema)
+            # Parse response
+            response_text = bedrock_client.extract_text_response(response)
+            extracted_data = parse_llm_response(response_text)
 
             self.logger.info(
                 f"[{group_id}] Base info extraction completed successfully"
@@ -513,7 +363,7 @@ class BaseInfoExtractorNode(BaseWorkflowNode):
 
             return self._create_success_response(
                 step_id="base_info_complete",
-                extracted_base_info=aggregated_info,
+                extracted_base_info=extracted_data,
             )
 
         except Exception as e:

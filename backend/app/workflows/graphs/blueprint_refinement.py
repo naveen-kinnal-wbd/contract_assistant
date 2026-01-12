@@ -55,8 +55,8 @@ def get_workflow() -> Any:
 
         # Add the core nodes - instantiate classes here (callable via __call__)
         workflow.add_node("upload_documents", ContractUploaderNode())
-        workflow.add_node("base_info_extractor_agent", BaseInfoExtractorNode())
-        workflow.add_node("asset_selector", AssetSelectorNode())
+        # workflow.add_node("base_info_extractor_agent", BaseInfoExtractorNode())
+        # workflow.add_node("asset_selector", AssetSelectorNode())
         workflow.add_node("media_rights_extractor", MediaRightsExtractorNode())
         workflow.add_node("finalize", FinalizeWorkflowNode())
 
@@ -64,13 +64,13 @@ def get_workflow() -> Any:
         workflow.set_entry_point("upload_documents")
 
         # Connect upload to base info extraction
-        workflow.add_edge("upload_documents", "base_info_extractor_agent")
+        workflow.add_edge("upload_documents", "media_rights_extractor")
 
         # Connect base info extraction to program selector
-        workflow.add_edge("base_info_extractor_agent", "asset_selector")
+        # workflow.add_edge("base_info_extractor_agent", "asset_selector")
 
-        # Connect program selector to media rights extractor
-        workflow.add_edge("asset_selector", "media_rights_extractor")
+        # # Connect program selector to media rights extractor
+        # workflow.add_edge("asset_selector", "media_rights_extractor")
 
         # Connect media rights extractor to finalize
         workflow.add_edge("media_rights_extractor", "finalize")
